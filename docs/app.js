@@ -236,8 +236,6 @@ function upcomingByDate() {
   return g;
 }
 const needsReview = (r) => r.keys.some((k) => pendingReview(r, k, S.state.changes).length);
-const poolComments = (key) => (S.state.poolComments || []).filter((c) => c.key === key);
-const unreadComments = (keys) => (S.state.poolComments || []).filter((c) => keys.includes(c.key) && !(c.readBy || []).includes(S.me.id)).length;
 function viewTeams() {
   // Ledare och lagledare: bara fastställda lag, utan färger
   const rs = S.state.rounds.filter((r) => r.status === 'fastställt');
@@ -269,7 +267,6 @@ function viewRounds() {
         <span class="rname">${esc(r.name)}</span>
         <span class="badge ${r.status === 'fastställt' ? 'ok' : 'draft'}">${r.status === 'fastställt' ? 'Fastställt' : 'Utkast'}</span>
         ${needsReview(r) ? '<span class="badge review">Granska</span>' : ''}
-        ${unreadComments(r.keys) ? `<span class="badge new">${unreadComments(r.keys)} ny${unreadComments(r.keys) > 1 ? 'a' : ''} kommentar${unreadComments(r.keys) > 1 ? 'er' : ''}</span>` : ''}
         <span class="small muted block">${r.keys.map((k) => esc(U(k)?.label || '?') + ' ' + fDate(U(k)?.date)).join(' · ')}</span>
         <span class="small muted block">Senast ändrad ${fDT(r.updatedAt)} av ${esc(r.updatedByName || '')}</span>
       </a></li>`).join('')}</ul>` : '<p class="muted">Inga omgångar ännu. Skapa den första nedan.</p>'}
@@ -380,7 +377,6 @@ function teamCard(key) {
   const dist = S.view.validation.levelDist[key] || {};
   const errors = v.filter((x) => x.level === 'error').length;
   const review = pendingReview(r, key, S.state.changes);
-  const comments = (r.comments || []).filter((c) => c.key === key);
   const status = review.length ? '<span class="badge review">Granska</span>' : errors ? '<span class="badge bad">Saknas</span>' : '<span class="badge ok">Klart</span>';
   return `
   <article class="card" style="--c:${teamColor(u)}">
@@ -417,19 +413,7 @@ function teamCard(key) {
         <button class="btn" data-act="copyteam" data-key="${esc(key)}">Kopiera laglista</button>
         <a class="btn" href="#/utskrift/${r.id}/${encodeURIComponent(key)}">Laglista som PDF</a>
       </div>
-      ${(() => {
-        const lc = poolComments(key);
-        if (!lc.length) return '';
-        const unread = lc.filter((c) => !(c.readBy || []).includes(S.me.id)).length;
-        return `<div class="leadercomments ${unread ? 'unread' : ''}"><strong>Från ledarna${unread ? ` (${unread} ny${unread > 1 ? 'a' : ''})` : ''}</strong>
-          ${lc.map((c) => `<div class="comment"><div class="small muted">${esc(c.name)} · ${fDT(c.at)}</div>${esc(c.text)}</div>`).join('')}
-          ${unread ? `<button class="btn small" data-act="markread" data-key="${esc(key)}">Markera som läst</button>` : ''}</div>`;
-      })()}
-      <details class="comments" ${comments.length ? 'open' : ''}>
-        <summary>Interna kommentarer (${comments.length})</summary>
-        ${comments.map((c) => `<div class="comment"><div class="small muted">${esc(c.name)} · ${fDT(c.at)} ${c.userId === S.me.id || S.me.role === 'admin' ? `<button class="linkbtn" data-act="delcomment" data-id="${c.id}">ta bort</button>` : ''}</div>${esc(c.text)}</div>`).join('')}
-        <form class="commentform" data-key="${esc(key)}"><input name="text" placeholder="Skriv en kommentar till ledarna" maxlength="1000"><button class="btn small">Skicka</button></form>
-      </details>
+
     </div>
   </article>`;
 }
@@ -532,12 +516,6 @@ function renderRound(keepScroll) {
     const f = Object.fromEntries([...new FormData(e.target)].map(([k, v]) => [k, parseInt(v, 10)]));
     act('settings', { settings: f }).then((ok) => ok && toast('Inställningarna är sparade.'));
   };
-  app.querySelectorAll('.commentform').forEach((f) => (f.onsubmit = async (e) => {
-    e.preventDefault();
-    const text = f.text.value.trim();
-    if (!text) return;
-    try { await B.addComment(S.round.id, f.dataset.key, text); await reloadRound(); } catch (err) { toast(err.message, true); }
-  }));
 }
 
 function playerDialog(pid, fromKey) {
@@ -741,15 +719,13 @@ function viewSchedule() {
   </section>
   <section class="panel">
     <h2>Kommande poolspel</h2>
-    <p class="small muted">Har du något lagplanerarna behöver veta om ett poolspel? Skriv en kommentar så ser de den.</p>
+
     ${[...groups].map(([d, us]) => `<h3 class="date">${fDate(d)}</h3>${us.map((u) => `
       <div class="sched ${u.missing ? 'missing' : ''}">
         <div><span class="tdot" style="--c:${teamColor(u)}"></span><strong>${esc(u.label)}</strong> · ${esc(u.venue)}${u.host ? ` · ${esc(u.host)}` : ''}
           ${u.missing ? '<span class="badge bad">Saknas i källan</span>' : ''}${byKey.has(u.key) ? '<span class="badge review">Ändrad</span>' : ''}</div>
         <div class="small">${u.matches.map((m) => `<span class="${m.missing ? 'strike' : ''}">${esc(m.start || '?')} ${esc(opponent(u, m))}</span>`).join(' · ')}</div>
         ${(byKey.get(u.key) || []).map((c) => `<div class="small changed">${fDT(c.at)}: ${c.items.map(esc).join('; ')}</div>`).join('')}
-        ${poolComments(u.key).map((c) => `<div class="comment small"><span class="muted">${esc(c.name)} · ${fDT(c.at)}</span> ${c.userId === S.me.id || S.me.planner ? `<button class="linkbtn" data-act="delpoolcomment" data-id="${c.id}">ta bort</button>` : ''}<div>${esc(c.text)}</div></div>`).join('')}
-        <button class="linkbtn" data-act="poolcomment" data-key="${esc(u.key)}">Kommentera</button>
       </div>`).join('')}`).join('') || '<p class="muted">Inga kommande poolspel.</p>'}
   </section>
   <section class="panel">
@@ -798,7 +774,7 @@ async function viewLeaders() {
     <form id="myname" class="row wrapform"><label>Ditt namn<input name="name" value="${esc(S.me.name)}" maxlength="60"></label><button class="btn">Spara namn</button></form>
     <p class="small">Dina roller: <strong>${esc(roleText(S.me))}</strong></p>
     ${admin ? `
-    <p class="small muted"><strong>Lagplanerare</strong> ser nivåfärger och gör lagen. <strong>Lagledare</strong> publicerar rutiner och ändrar matchinbjudningar. <strong>Ledare</strong> ser matcher, fastställda lag och rutiner. <strong>Administratör</strong> har allt och bjuder in.</p>
+    <p class="small muted"><strong>Lagplanerare</strong> ser nivåfärger och gör lagen. <strong>Lagledare</strong> ändrar matchinbjudningar och kan återställa borttagna rutiner. <strong>Ledare</strong> ser matcher och fastställda lag, och skriver rutiner. <strong>Administratör</strong> har allt och bjuder in.</p>
     <ul class="users">${data.users.map((u) => `<li><strong>${esc(u.name)}</strong> <span class="small muted">${esc(u.email)}</span>${u.id === S.me.id ? ' <span class="small muted">(du)</span>' : ''}
       <span class="rolechecks">
         <label class="check"><input type="checkbox" data-act="setroles" data-id="${u.id}" data-r="admin" ${u.role === 'admin' ? 'checked' : ''} ${u.id === S.me.id ? 'disabled' : ''}> Admin</label>
@@ -1041,29 +1017,32 @@ async function viewPrint(roundId, onlyKey) {
 
 // ---------- rutinbank ----------
 const catName = (id) => (S.state.routineCategories || []).find((c) => c.id === id)?.name || '';
-const canEditRoutine = (r) => S.me.teamlead || (r.status === 'utkast' && r.createdBy === S.me.id);
+const canRestore = () => S.me.teamlead || S.me.planner;
 function viewRoutines() {
-  const rs = S.state.routines || [];
+  const all = S.state.routines || [];
   const cats = [...(S.state.routineCategories || [])].sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, 'sv'));
   const q = (S.routineQuery || '').toLowerCase();
-  const match = (r) => !q || r.title.toLowerCase().includes(q);
-  const pub = rs.filter((r) => r.status === 'publicerad' && match(r));
-  const drafts = rs.filter((r) => r.status === 'utkast' && match(r));
+  const live = all.filter((r) => !r.deletedAt && (!q || r.title.toLowerCase().includes(q)));
+  const trash = all.filter((r) => r.deletedAt);
   const item = (r) => `<li><a href="#/rutin/${r.id}"><span class="rname">${esc(r.title)}</span>
-    ${r.status === 'utkast' ? '<span class="badge draft">Utkast</span>' : ''}
-    <span class="small muted block">${r.status === 'utkast' ? `Skrivet av ${esc(r.createdByName || '')}` : `Uppdaterad ${fDT(r.updatedAt)}`}</span></a></li>`;
+    <span class="small muted block">Uppdaterad ${fDT(r.updatedAt)} av ${esc(r.updatedByName || '')}</span></a></li>`;
+  const uncategorized = live.filter((r) => !cats.some((c) => c.id === r.categoryId));
+  const purgeDate = (r) => fDate(new Date(Date.parse(r.deletedAt) + 30 * 864e5).toISOString().slice(0, 10));
   app.innerHTML = `
   <section class="panel">
     <div class="row"><h2 style="flex:1;margin:0">Rutinbank</h2><a class="btn primary" href="#/rutin/ny">+ Ny rutin</a></div>
     <label class="small">Sök<input type="search" id="rsearch" value="${esc(S.routineQuery || '')}" placeholder="t.ex. kiosk, sekretariat"></label>
-    ${cats.map((c) => { const list = pub.filter((r) => r.categoryId === c.id); return list.length || S.me.teamlead ? `<h3>${esc(c.name)}</h3><ul class="rounds">${list.map(item).join('') || '<li class="muted small">Inga rutiner i kategorin.</li>'}</ul>` : ''; }).join('')}
-    ${pub.filter((r) => !cats.some((c) => c.id === r.categoryId)).length ? `<h3>Utan kategori</h3><ul class="rounds">${pub.filter((r) => !cats.some((c) => c.id === r.categoryId)).map(item).join('')}</ul>` : ''}
-    ${!pub.length && !cats.length ? '<p class="muted">Inga publicerade rutiner ännu.</p>' : ''}
+    ${cats.map((c) => { const list = live.filter((r) => r.categoryId === c.id); return `<h3>${esc(c.name)}</h3><ul class="rounds">${list.map(item).join('') || '<li class="muted small">Inga rutiner i kategorin.</li>'}</ul>`; }).join('')}
+    ${uncategorized.length ? `<h3>Utan kategori</h3><ul class="rounds">${uncategorized.map(item).join('')}</ul>` : ''}
+    ${!live.length && !cats.length ? '<p class="muted">Inga rutiner ännu. Skapa den första!</p>' : ''}
   </section>
-  ${drafts.length ? `<section class="panel"><h2>Utkast <span class="small muted">${S.me.teamlead ? 'väntar på att en lagledare publicerar dem' : 'dina egna'}</span></h2><ul class="rounds">${drafts.map(item).join('')}</ul></section>` : ''}
-  ${S.me.teamlead ? `<section class="panel"><h2>Kategorier</h2>
-    <ul class="users">${cats.map((c) => `<li>${esc(c.name)} <button class="linkbtn" data-act="catrename" data-id="${c.id}">byt namn</button> <button class="linkbtn danger" data-act="catdelete" data-id="${c.id}">ta bort</button></li>`).join('') || '<li class="muted">Inga kategorier ännu.</li>'}</ul>
+  <section class="panel"><h2>Kategorier</h2>
+    <ul class="users">${cats.map((c) => `<li>${esc(c.name)} <button class="linkbtn" data-act="catrename" data-id="${c.id}">byt namn</button>${canRestore() ? ` <button class="linkbtn danger" data-act="catdelete" data-id="${c.id}">ta bort</button>` : ''}</li>`).join('') || '<li class="muted">Inga kategorier ännu.</li>'}</ul>
     <div class="row wrapform"><input id="newcat" placeholder="Ny kategori, t.ex. Hemmapoolspel" maxlength="40"><button class="btn" data-act="catadd">Lägg till</button></div>
+  </section>
+  ${canRestore() ? `<section class="panel"><h2>Borttagna rutiner <span class="small muted">syns bara för lagledare och lagplanerare, raderas för gott efter 30 dagar</span></h2>
+    <ul class="users">${trash.map((r) => `<li><strong>${esc(r.title)}</strong> <span class="small muted">borttagen ${fDT(r.deletedAt)} av ${esc(r.deletedByName || '')} · raderas ${esc(purgeDate(r))}</span>
+      <button class="linkbtn" data-act="routinerestore" data-id="${r.id}">återställ</button> <button class="linkbtn danger" data-act="routinepurge" data-id="${r.id}">radera nu</button></li>`).join('') || '<li class="muted">Papperskorgen är tom.</li>'}</ul>
   </section>` : ''}`;
   $('#rsearch').oninput = (e) => { S.routineQuery = e.target.value; const pos = e.target.selectionStart; viewRoutines(); const el = $('#rsearch'); el.focus(); el.setSelectionRange(pos, pos); };
 }
@@ -1080,19 +1059,23 @@ const routineMeta = (r) => `<dl class="rmeta">
   <div><dt>Ansvarig</dt><dd>${esc(r.content?.responsible || '–')}</dd></div>
   <div><dt>Gäller för</dt><dd>${esc(r.content?.appliesTo || '–')}</dd></div>
   <div><dt>Version</dt><dd>${r.version} · ${esc(fDT(r.updatedAt))}</dd></div>
-  <div><dt>${r.status === 'publicerad' ? 'Publicerad av' : 'Status'}</dt><dd>${r.status === 'publicerad' ? esc(r.publishedByName || '') : 'Utkast'}</dd></div></dl>`;
+  <div><dt>Senast ändrad av</dt><dd>${esc(r.updatedByName || '')}</dd></div></dl>`;
 async function viewRoutine(id) {
   const r = await B.getRoutine(id);
+  const versions = canRestore() ? await B.getRoutineVersions(id).catch(() => []) : [];
   app.innerHTML = `
+  ${r.deletedAt ? `<div class="alert warn">Rutinen togs bort ${fDT(r.deletedAt)} av ${esc(r.deletedByName || '')}. <button class="btn small" data-act="routinerestore" data-id="${r.id}">Återställ</button></div>` : ''}
   <div class="row noprint"><a href="#/rutiner" class="back" style="flex:1">← Rutinbank</a>
     <a class="btn" href="#/rutin/${r.id}/utskrift">Skriv ut / PDF</a>
-    ${canEditRoutine(r) ? `<a class="btn primary" href="#/rutin/${r.id}/redigera">Redigera</a>` : ''}</div>
+    ${r.deletedAt ? '' : `<a class="btn primary" href="#/rutin/${r.id}/redigera">Redigera</a>`}</div>
   <article class="routine">
-    <header class="rhead"><img src="${esc(S.state.settings.logo || 'logo.png')}" alt="Järfälla HC"><div><span class="rkicker">Rutin${r.categoryId ? ' · ' + esc(catName(r.categoryId)) : ''}${r.status === 'utkast' ? ' · utkast' : ''}</span><h1>${esc(r.title)}</h1></div></header>
+    <header class="rhead"><img src="${esc(S.state.settings.logo || 'logo.png')}" alt="Järfälla HC"><div><span class="rkicker">Rutin${r.categoryId ? ' · ' + esc(catName(r.categoryId)) : ''}</span><h1>${esc(r.title)}</h1></div></header>
     ${routineMeta(r)}
     <div class="rbody">${routineBody(r)}</div>
   </article>
-  ${S.me.teamlead ? `<p class="noprint"><button class="linkbtn danger" data-act="routinedelete" data-id="${r.id}">Ta bort rutinen</button></p>` : (r.status === 'utkast' && r.createdBy === S.me.id ? `<p class="noprint"><button class="linkbtn danger" data-act="routinedelete" data-id="${r.id}">Ta bort utkastet</button></p>` : '')}`;
+  ${versions.length ? `<details class="panel noprint"><summary><strong>Ändringshistorik</strong> <span class="small muted">${versions.length} tidigare versioner</span></summary>
+    <ul class="log">${versions.map((v) => `<li><span class="small muted">${fDT(v.savedAt)}</span> version ${v.version} av ${esc(v.savedByName || '')}${v.title !== r.title ? ` (rubrik: ${esc(v.title)})` : ''}</li>`).join('')}</ul></details>` : ''}
+  ${r.deletedAt ? '' : `<p class="noprint"><button class="linkbtn danger" data-act="routinedelete" data-id="${r.id}">Ta bort rutinen</button></p>`}`;
 }
 async function printRoutine(id) {
   const r = await B.getRoutine(id);
@@ -1107,8 +1090,7 @@ async function printRoutine(id) {
   </section>`;
 }
 async function editRoutine(id) {
-  const r = id ? await B.getRoutine(id) : { title: '', status: 'utkast', categoryId: null, content: { before: [''], during: [''], after: [''] } };
-  if (id && !canEditRoutine(r)) { toast('Du kan bara ändra dina egna utkast.', true); location.hash = `#/rutin/${id}`; return; }
+  const r = id ? await B.getRoutine(id) : { title: '', categoryId: null, content: { before: [''], during: [''], after: [''] } };
   const c = r.content || {};
   const cats = S.state.routineCategories || [];
   const listField = (name, label, items) => `<fieldset class="rfield"><legend>${label}</legend>
@@ -1118,33 +1100,41 @@ async function editRoutine(id) {
   <a href="${id ? `#/rutin/${id}` : '#/rutiner'}" class="back">← Avbryt</a>
   <section class="panel">
     <h2>${id ? 'Redigera rutin' : 'Ny rutin'}</h2>
-    <p class="small muted">Du skriver bara innehållet. Logga, färger och upplägg kommer från klubbens mall.${S.me.teamlead ? '' : ' Rutinen sparas som utkast, och en lagledare publicerar den och väljer kategori.'}</p>
+    <p class="small muted">Du skriver bara innehållet. Logga, färger och upplägg kommer från klubbens mall. Rutinen syns för alla ledare så fort du sparar.</p>
     <form id="rform" class="stack">
       <label>Rubrik<input name="title" value="${esc(r.title)}" required maxlength="120"></label>
       <div class="grid4">
+        <label>Kategori<select name="categoryId"><option value="">Ingen kategori</option>${cats.map((k) => `<option value="${k.id}" ${r.categoryId === k.id ? 'selected' : ''}>${esc(k.name)}</option>`).join('')}<option value="__new">+ Ny kategori…</option></select></label>
+        <label class="newcatfield" hidden>Ny kategori<input name="newcat" maxlength="40" placeholder="t.ex. Hemmapoolspel"></label>
         <label>Ansvarig<input name="responsible" value="${esc(c.responsible || '')}" maxlength="80"></label>
         <label>Gäller för<input name="appliesTo" value="${esc(c.appliesTo || '')}" maxlength="80"></label>
-        ${S.me.teamlead ? `<label>Kategori<select name="categoryId"><option value="">Ingen kategori</option>${cats.map((k) => `<option value="${k.id}" ${r.categoryId === k.id ? 'selected' : ''}>${esc(k.name)}</option>`).join('')}</select></label>
-        <label>Status<select name="status"><option value="utkast" ${r.status === 'utkast' ? 'selected' : ''}>Utkast</option><option value="publicerad" ${r.status === 'publicerad' ? 'selected' : ''}>Publicerad</option></select></label>` : ''}
       </div>
       <label>Syfte <span class="small muted">Varför finns rutinen? 1–2 meningar.</span><textarea name="purpose" rows="3">${esc(c.purpose || '')}</textarea></label>
       ${listField('before', 'Före', c.before)}${listField('during', 'Under', c.during)}${listField('after', 'Efter', c.after)}
       <label>Vid problem<input name="problem" value="${esc(c.problem || '')}" placeholder="Vem ringer man?"></label>
-      <div class="row"><button class="btn primary">${S.me.teamlead ? 'Spara' : 'Spara utkast'}</button></div>
+      <div class="row"><button class="btn primary">Spara</button></div>
     </form>
   </section>`;
-  $('#rform').onsubmit = async (e) => {
+  const f = $('#rform');
+  f.categoryId.onchange = () => { f.querySelector('.newcatfield').hidden = f.categoryId.value !== '__new'; if (f.categoryId.value === '__new') f.newcat.focus(); };
+  f.onsubmit = async (e) => {
     e.preventDefault();
-    const f = e.target;
     const items = (n) => [...f.querySelectorAll(`input[name=${n}]`)].map((x) => x.value.trim()).filter(Boolean);
-    const data = {
-      id: r.id, title: f.title.value.trim(),
-      categoryId: S.me.teamlead ? f.categoryId.value || null : null,
-      status: S.me.teamlead ? f.status.value : 'utkast',
-      content: { responsible: f.responsible.value.trim(), appliesTo: f.appliesTo.value.trim(), purpose: f.purpose.value.trim(), before: items('before'), during: items('during'), after: items('after'), problem: f.problem.value.trim() },
-    };
-    try { const nid = await B.saveRoutine(data); await refreshState(); toast(data.status === 'publicerad' ? 'Rutinen är publicerad.' : 'Utkastet är sparat.'); location.hash = `#/rutin/${nid}`; }
-    catch (err) { toast(err.message, true); }
+    try {
+      let categoryId = f.categoryId.value || null;
+      if (categoryId === '__new') {
+        const name = f.newcat.value.trim();
+        if (!name) { toast('Skriv ett namn på den nya kategorin.', true); return; }
+        await B.addCategory(name.slice(0, 40), cats.length + 1);
+        await refreshState();
+        categoryId = (S.state.routineCategories || []).find((k) => k.name === name.slice(0, 40))?.id || null;
+      }
+      const nid = await B.saveRoutine({
+        id: r.id, title: f.title.value.trim(), categoryId,
+        content: { responsible: f.responsible.value.trim(), appliesTo: f.appliesTo.value.trim(), purpose: f.purpose.value.trim(), before: items('before'), during: items('during'), after: items('after'), problem: f.problem.value.trim() },
+      });
+      await refreshState(); toast('Rutinen är sparad.'); location.hash = `#/rutin/${nid}`;
+    } catch (err) { toast(err.message, true); }
   };
 }
 
@@ -1409,7 +1399,6 @@ document.addEventListener('click', async (e) => {
       case 'reopen': if (await act('reopen')) toast('Omgången är ett utkast igen.'); break;
       case 'rename': { const n = await askText('Nytt namn på omgången', S.round.name); if (n) await act('rename', { name: n }); break; }
       case 'ack': await B.ackChanges(d.key); await refreshState(); renderRound(true); break;
-      case 'delcomment': if (await askConfirm('Ta bort kommentaren?')) { await B.deleteComment(d.id); await reloadRound(); } break;
       case 'copyteam': {
         const t = S.round.teams[d.key];
         await copyText(S.view.copy[d.key]);
@@ -1417,19 +1406,12 @@ document.addEventListener('click', async (e) => {
         break;
       }
       case 'addreserve': reserveDialog(d.key); break;
-      case 'markread': await B.markPoolRead(d.key); await refreshState(); renderRound(true); break;
-      case 'poolcomment': {
-        const u = U(d.key);
-        const text = await askText(`Kommentar till lagplanerarna om ${u?.label} ${fDate(u?.date)}`, '', { multiline: true, ok: 'Skicka' });
-        if (!text?.trim()) return;
-        await B.addPoolComment(d.key, text.trim().slice(0, 1000)); await refreshState(); viewSchedule(); toast('Kommentaren är skickad till lagplanerarna.');
-        break;
-      }
-      case 'delpoolcomment': if (await askConfirm('Ta bort kommentaren?')) { await B.deletePoolComment(d.id); await refreshState(); viewSchedule(); } break;
       case 'catadd': { const n = $('#newcat').value.trim(); if (!n) return; await B.addCategory(n.slice(0, 40), (S.state.routineCategories || []).length + 1); await refreshState(); viewRoutines(); break; }
       case 'catrename': { const c = S.state.routineCategories.find((x) => x.id === d.id); const n = await askText('Nytt namn', c?.name); if (n?.trim()) { await B.updateCategory(d.id, { name: n.trim().slice(0, 40) }); await refreshState(); viewRoutines(); } break; }
       case 'catdelete': if (await askConfirm('Ta bort kategorin? Rutinerna i den blir kvar utan kategori.')) { await B.deleteCategory(d.id); await refreshState(); viewRoutines(); } break;
-      case 'routinedelete': if (await askConfirm('Ta bort rutinen? Det går inte att ångra.')) { await B.deleteRoutine(d.id); await refreshState(); location.hash = '#/rutiner'; } break;
+      case 'routinedelete': if (await askConfirm('Ta bort rutinen? Lagledare och lagplanerare kan återställa den i 30 dagar.')) { await B.deleteRoutine(d.id); await refreshState(); toast('Rutinen är borttagen.'); location.hash = '#/rutiner'; } break;
+      case 'routinerestore': await B.restoreRoutine(d.id); await refreshState(); toast('Rutinen är återställd.'); if (location.hash === '#/rutiner') viewRoutines(); else viewRoutine(d.id); break;
+      case 'routinepurge': if (await askConfirm('Radera rutinen för gott? Det går inte att ångra.')) { await B.purgeRoutine(d.id); await refreshState(); viewRoutines(); } break;
       case 'additem': { const box = document.querySelector(`.items[data-list="${d.list}"]`); const i = document.createElement('input'); i.name = d.list; i.placeholder = 'En punkt per rad'; box.append(i); i.focus(); break; }
       case 'coaches': coachDialog(d.key); break;
       case 'coachkids': kidsDialog(d.id); break;

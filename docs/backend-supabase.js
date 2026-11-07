@@ -112,7 +112,7 @@ export function createSupabaseBackend({ url, anonKey }) {
       return this.me();
     },
     async loadState() {
-      const [settings, players, avail, schedule, changes, rounds, history, coaches, cavail, levels, poolComments, teamColors, clubs, homeEvents, invitations, routines, categories] = await Promise.all([
+      const [settings, players, avail, schedule, changes, rounds, history, coaches, cavail, levels, teamColors, clubs, homeEvents, invitations, routines, categories] = await Promise.all([
         rest('GET', 'settings?select=data&id=eq.1'),
         rest('GET', 'players?select=*&order=name'),
         rest('GET', 'availability?select=uppdrag_key,player_id'),
@@ -123,12 +123,11 @@ export function createSupabaseBackend({ url, anonKey }) {
         rest('GET', 'coaches?select=id,name,active,squad,children&order=name'),
         rest('GET', 'coach_availability?select=uppdrag_key,coach_id'),
         rest('GET', 'player_levels?select=player_id,level'),
-        rest('GET', 'pool_comments?select=*&order=at'),
         rest('GET', 'team_colors?select=*'),
         rest('GET', 'clubs?select=*'),
         rest('GET', 'home_events?select=*&order=date'),
         rest('GET', 'invitations?select=*'),
-        rest('GET', 'routines?select=id,title,category_id,status,version,created_by,created_by_name,updated_at,updated_by_name,published_at&order=title'),
+        rest('GET', 'routines?select=id,title,category_id,status,version,created_by,created_by_name,updated_at,updated_by_name,published_at,deleted_at,deleted_by_name&order=title'),
         rest('GET', 'routine_categories?select=*&order=sort,name'),
       ]);
       const levelOf = new Map(levels.map((l) => [l.player_id, l.level]));
@@ -138,12 +137,11 @@ export function createSupabaseBackend({ url, anonKey }) {
       for (const a of avail) (availability[a.uppdrag_key] ||= {})[a.player_id] = false;
       return {
         settings: settings[0]?.data, players: players.map((p) => mapPlayer({ ...p, level: levelOf.get(p.id) })), availability, coachAvailability,
-        poolComments: poolComments.map((c) => ({ id: c.id, key: c.uppdrag_key, userId: c.user_id, name: c.name, text: c.text, at: c.at, readBy: c.read_by || [] })),
         teamColors: Object.fromEntries(teamColors.map((t) => [t.team, { home: t.home, away: t.away, source: t.source }])),
         clubs: Object.fromEntries(clubs.map((c) => [c.name, { logo: c.logo }])),
         homeEvents: homeEvents.map((e) => ({ key: e.key, date: e.date, venue: e.venue, data: e.data, fetchedAt: e.fetched_at })),
         invitations: Object.fromEntries(invitations.map((i) => [i.event_key, { ...i.data, updatedAt: i.updated_at, updatedByName: i.updated_by_name }])),
-        routines: routines.map((r) => ({ id: r.id, title: r.title, categoryId: r.category_id, status: r.status, version: r.version, createdBy: r.created_by, createdByName: r.created_by_name, updatedAt: r.updated_at, updatedByName: r.updated_by_name, publishedAt: r.published_at })),
+        routines: routines.map((r) => ({ id: r.id, title: r.title, categoryId: r.category_id, status: r.status, version: r.version, createdBy: r.created_by, createdByName: r.created_by_name, updatedAt: r.updated_at, updatedByName: r.updated_by_name, publishedAt: r.published_at, deletedAt: r.deleted_at, deletedByName: r.deleted_by_name })),
         routineCategories: categories,
         coaches: coaches.map((c) => ({ id: c.id, name: c.name, active: c.active, squad: c.squad || 'ordinarie', children: c.children || [] })),
         schedule: schedule[0] || { uppdrag: {} }, changes,
@@ -215,24 +213,26 @@ export function createSupabaseBackend({ url, anonKey }) {
     addComment: (roundId, key, text) => rest('POST', 'comments', { round_id: roundId, uppdrag_key: key, text }),
     deleteComment: (id) => rest('DELETE', `comments?id=eq.${id}`),
 
-    // kommentarer per poolspel
-    addPoolComment: (key, text) => rest('POST', 'pool_comments', { uppdrag_key: key, text }),
-    deletePoolComment: (id) => rest('DELETE', `pool_comments?id=eq.${id}`),
-    markPoolRead: (key) => rpc('mark_pool_comments_read', { p_key: key }),
 
     // rutinbank
     async getRoutine(id) {
       const [r] = await rest('GET', `routines?select=*&id=eq.${id}`);
       if (!r) throw new AppError('Rutinen finns inte eller är inte publicerad.');
-      return { id: r.id, title: r.title, categoryId: r.category_id, status: r.status, content: r.content || {}, version: r.version, createdBy: r.created_by, createdByName: r.created_by_name, updatedAt: r.updated_at, updatedByName: r.updated_by_name, publishedAt: r.published_at, publishedByName: r.published_by_name };
+      return { id: r.id, title: r.title, categoryId: r.category_id, status: r.status, content: r.content || {}, version: r.version, createdBy: r.created_by, createdByName: r.created_by_name, updatedAt: r.updated_at, updatedByName: r.updated_by_name, publishedAt: r.published_at, publishedByName: r.published_by_name, deletedAt: r.deleted_at, deletedByName: r.deleted_by_name };
     },
     async saveRoutine(r) {
-      const body = { title: r.title, category_id: r.categoryId || null, status: r.status || 'utkast', content: r.content || {} };
+      const body = { title: r.title, category_id: r.categoryId || null, content: r.content || {} };
       const rows = r.id ? await rest('PATCH', `routines?id=eq.${r.id}`, body, 'return=representation') : await rest('POST', 'routines', body, 'return=representation');
-      if (!rows?.length) throw new AppError('Rutinen kunde inte sparas. Du kan bara ändra dina egna utkast.');
+      if (!rows?.length) throw new AppError('Rutinen kunde inte sparas.');
       return rows[0].id;
     },
-    deleteRoutine: (id) => rest('DELETE', `routines?id=eq.${id}`),
+    deleteRoutine: (id) => rpc('trash_routine', { p_id: id }),
+    restoreRoutine: (id) => rpc('restore_routine', { p_id: id }),
+    purgeRoutine: (id) => rest('DELETE', `routines?id=eq.${id}`),
+    async getRoutineVersions(id) {
+      const rows = await rest('GET', `routine_versions?select=version,title,saved_at,saved_by_name&routine_id=eq.${id}&order=version.desc`);
+      return rows.map((v) => ({ version: v.version, title: v.title, savedAt: v.saved_at, savedByName: v.saved_by_name }));
+    },
     addCategory: (name, sort) => rest('POST', 'routine_categories', { name, sort: sort || 0 }),
     updateCategory: (id, patch) => rest('PATCH', `routine_categories?id=eq.${id}`, patch),
     deleteCategory: (id) => rest('DELETE', `routine_categories?id=eq.${id}`),
@@ -265,7 +265,7 @@ export function createSupabaseBackend({ url, anonKey }) {
     setMyName: (name) => rpc('set_my_name', { p_name: name }),
     saveSettings: (data, rename) => rpc('save_settings', { p_data: data, p_rename: rename || {} }),
     async exportAll() {
-      const tables = ['settings', 'players', 'player_levels', 'coaches', 'coach_availability', 'availability', 'schedule', 'schedule_changes', 'rounds', 'history', 'comments', 'pool_comments', 'routine_categories', 'routines', 'routine_versions', 'team_colors', 'clubs', 'home_events', 'invitations', 'leaders'];
+      const tables = ['settings', 'players', 'player_levels', 'coaches', 'coach_availability', 'availability', 'schedule', 'schedule_changes', 'rounds', 'history', 'comments', 'routine_categories', 'routines', 'routine_versions', 'team_colors', 'clubs', 'home_events', 'invitations', 'leaders'];
       const out = { exportedAt: new Date().toISOString() };
       for (const t of tables) out[t] = await rest('GET', `${t}?select=*`);
       return out;
