@@ -70,7 +70,7 @@ export function createSupabaseBackend({ url, anonKey }) {
   const rpc = (fn, args) => rest('POST', `rpc/${fn}`, args || {});
   const uid = () => session?.user?.id;
 
-  const mapPlayer = (p) => ({ id: p.id, name: p.name, level: p.level, canGoalie: p.can_goalie, active: p.active, squad: p.squad || 'ordinarie' });
+  const mapPlayer = (p) => ({ id: p.id, name: p.name, level: p.level || null, canGoalie: p.can_goalie, active: p.active, squad: p.squad || 'ordinarie' });
   const mapRound = (r) => ({
     ...(r.data || {}), id: r.id, name: r.name, status: r.status, version: r.version,
     createdAt: r.created_at, createdByName: r.created_by_name, updatedAt: r.updated_at, updatedBy: r.updated_by,
@@ -83,10 +83,11 @@ export function createSupabaseBackend({ url, anonKey }) {
     async me() {
       if (!session) return null;
       await token();
-      const rows = await rest('GET', `leaders?select=user_id,email,name,role&user_id=eq.${uid()}`);
+      const rows = await rest('GET', `leaders?select=user_id,email,name,role,planner,teamlead&user_id=eq.${uid()}`);
       if (!rows?.length) throw new AppError('Ditt konto saknar åtkomst. Be en administratör om en ny inbjudan.', { noAccess: true });
       const l = rows[0];
-      return { id: l.user_id, email: l.email, name: l.name || l.email, role: l.role };
+      const admin = l.role === 'admin';
+      return { id: l.user_id, email: l.email, name: l.name || l.email, role: l.role, admin, planner: admin || !!l.planner, teamlead: admin || !!l.teamlead };
     },
     async login(email, password) {
       saveSession(await authCall('token?grant_type=password', { email: email.trim().toLowerCase(), password }));
@@ -111,7 +112,7 @@ export function createSupabaseBackend({ url, anonKey }) {
       return this.me();
     },
     async loadState() {
-      const [settings, players, avail, schedule, changes, rounds, history, coaches, cavail] = await Promise.all([
+      const [settings, players, avail, schedule, changes, rounds, history, coaches, cavail, levels, poolComments, teamColors, clubs, homeEvents, invitations, routines, categories] = await Promise.all([
         rest('GET', 'settings?select=data&id=eq.1'),
         rest('GET', 'players?select=*&order=name'),
         rest('GET', 'availability?select=uppdrag_key,player_id'),
@@ -121,13 +122,29 @@ export function createSupabaseBackend({ url, anonKey }) {
         rest('GET', 'history?select=*&order=confirmed_at'),
         rest('GET', 'coaches?select=id,name,active,squad,children&order=name'),
         rest('GET', 'coach_availability?select=uppdrag_key,coach_id'),
+        rest('GET', 'player_levels?select=player_id,level'),
+        rest('GET', 'pool_comments?select=*&order=at'),
+        rest('GET', 'team_colors?select=*'),
+        rest('GET', 'clubs?select=*'),
+        rest('GET', 'home_events?select=*&order=date'),
+        rest('GET', 'invitations?select=*'),
+        rest('GET', 'routines?select=id,title,category_id,status,version,created_by,created_by_name,updated_at,updated_by_name,published_at&order=title'),
+        rest('GET', 'routine_categories?select=*&order=sort,name'),
       ]);
+      const levelOf = new Map(levels.map((l) => [l.player_id, l.level]));
       const coachAvailability = {};
       for (const a of cavail) (coachAvailability[a.uppdrag_key] ||= {})[a.coach_id] = false;
       const availability = {};
       for (const a of avail) (availability[a.uppdrag_key] ||= {})[a.player_id] = false;
       return {
-        settings: settings[0]?.data, players: players.map(mapPlayer), availability, coachAvailability,
+        settings: settings[0]?.data, players: players.map((p) => mapPlayer({ ...p, level: levelOf.get(p.id) })), availability, coachAvailability,
+        poolComments: poolComments.map((c) => ({ id: c.id, key: c.uppdrag_key, userId: c.user_id, name: c.name, text: c.text, at: c.at, readBy: c.read_by || [] })),
+        teamColors: Object.fromEntries(teamColors.map((t) => [t.team, { home: t.home, away: t.away, source: t.source }])),
+        clubs: Object.fromEntries(clubs.map((c) => [c.name, { logo: c.logo }])),
+        homeEvents: homeEvents.map((e) => ({ key: e.key, date: e.date, venue: e.venue, data: e.data, fetchedAt: e.fetched_at })),
+        invitations: Object.fromEntries(invitations.map((i) => [i.event_key, { ...i.data, updatedAt: i.updated_at, updatedByName: i.updated_by_name }])),
+        routines: routines.map((r) => ({ id: r.id, title: r.title, categoryId: r.category_id, status: r.status, version: r.version, createdBy: r.created_by, createdByName: r.created_by_name, updatedAt: r.updated_at, updatedByName: r.updated_by_name, publishedAt: r.published_at })),
+        routineCategories: categories,
         coaches: coaches.map((c) => ({ id: c.id, name: c.name, active: c.active, squad: c.squad || 'ordinarie', children: c.children || [] })),
         schedule: schedule[0] || { uppdrag: {} }, changes,
         rounds: rounds.map((r) => ({ id: r.id, name: r.name, status: r.status, keys: r.keys || [], createdAt: r.created_at, updatedAt: r.updated_at, updatedByName: r.updated_by_name, confirmedAt: r.confirmed_at })),
@@ -135,20 +152,26 @@ export function createSupabaseBackend({ url, anonKey }) {
       };
     },
     async addPlayer(p) {
-      const [row] = await rest('POST', 'players', { name: p.name, level: p.level, can_goalie: !!p.canGoalie, squad: p.squad === 'reserv' ? 'reserv' : 'ordinarie' }, 'return=representation');
-      return mapPlayer(row);
+      const [row] = await rest('POST', 'players', { name: p.name, can_goalie: !!p.canGoalie, squad: p.squad === 'reserv' ? 'reserv' : 'ordinarie' }, 'return=representation');
+      if (p.level) await rest('POST', 'player_levels?on_conflict=player_id', { player_id: row.id, level: p.level }, 'resolution=merge-duplicates');
+      return mapPlayer({ ...row, level: p.level });
     },
     async updatePlayer(id, patch) {
       const body = { updated_at: new Date().toISOString() };
       if (patch.name !== undefined) body.name = patch.name;
-      if (patch.level !== undefined) body.level = patch.level;
+      if (patch.level !== undefined) await rest('POST', 'player_levels?on_conflict=player_id', { player_id: id, level: patch.level }, 'resolution=merge-duplicates');
       if (patch.canGoalie !== undefined) body.can_goalie = patch.canGoalie;
       if (patch.active !== undefined) body.active = patch.active;
       if (patch.squad !== undefined) body.squad = patch.squad === 'reserv' ? 'reserv' : 'ordinarie';
       await rest('PATCH', `players?id=eq.${id}`, body);
     },
     async importPlayers({ add, update, archive }) {
-      if (add.length) await rest('POST', 'players', add.map((p) => ({ name: p.name, level: p.level, can_goalie: p.canGoalie, squad: p.squad === 'reserv' ? 'reserv' : 'ordinarie' })));
+      if (add.length) {
+        const rows = await rest('POST', 'players', add.map((p) => ({ name: p.name, can_goalie: p.canGoalie, squad: p.squad === 'reserv' ? 'reserv' : 'ordinarie' })), 'return=representation');
+        const byName = new Map(add.map((p) => [p.name.toLowerCase(), p.level]));
+        const lv = rows.map((r) => ({ player_id: r.id, level: byName.get(r.name.toLowerCase()) })).filter((x) => x.level);
+        if (lv.length) await rest('POST', 'player_levels?on_conflict=player_id', lv, 'resolution=merge-duplicates');
+      }
       for (const p of update) await this.updatePlayer(p.id, { level: p.level, canGoalie: p.canGoalie, active: true, ...(p.squad ? { squad: p.squad } : {}) });
       if (archive.length) await rest('PATCH', `players?id=in.(${archive.map((a) => a.id).join(',')})`, { active: false });
     },
@@ -192,30 +215,57 @@ export function createSupabaseBackend({ url, anonKey }) {
     addComment: (roundId, key, text) => rest('POST', 'comments', { round_id: roundId, uppdrag_key: key, text }),
     deleteComment: (id) => rest('DELETE', `comments?id=eq.${id}`),
 
+    // kommentarer per poolspel
+    addPoolComment: (key, text) => rest('POST', 'pool_comments', { uppdrag_key: key, text }),
+    deletePoolComment: (id) => rest('DELETE', `pool_comments?id=eq.${id}`),
+    markPoolRead: (key) => rpc('mark_pool_comments_read', { p_key: key }),
+
+    // rutinbank
+    async getRoutine(id) {
+      const [r] = await rest('GET', `routines?select=*&id=eq.${id}`);
+      if (!r) throw new AppError('Rutinen finns inte eller är inte publicerad.');
+      return { id: r.id, title: r.title, categoryId: r.category_id, status: r.status, content: r.content || {}, version: r.version, createdBy: r.created_by, createdByName: r.created_by_name, updatedAt: r.updated_at, updatedByName: r.updated_by_name, publishedAt: r.published_at, publishedByName: r.published_by_name };
+    },
+    async saveRoutine(r) {
+      const body = { title: r.title, category_id: r.categoryId || null, status: r.status || 'utkast', content: r.content || {} };
+      const rows = r.id ? await rest('PATCH', `routines?id=eq.${r.id}`, body, 'return=representation') : await rest('POST', 'routines', body, 'return=representation');
+      if (!rows?.length) throw new AppError('Rutinen kunde inte sparas. Du kan bara ändra dina egna utkast.');
+      return rows[0].id;
+    },
+    deleteRoutine: (id) => rest('DELETE', `routines?id=eq.${id}`),
+    addCategory: (name, sort) => rest('POST', 'routine_categories', { name, sort: sort || 0 }),
+    updateCategory: (id, patch) => rest('PATCH', `routine_categories?id=eq.${id}`, patch),
+    deleteCategory: (id) => rest('DELETE', `routine_categories?id=eq.${id}`),
+
+    // matchinbjudan
+    saveTeamColor: (team, home, away) => rest('POST', 'team_colors?on_conflict=team', { team, home, away, source: 'manual', updated_at: new Date().toISOString() }, 'resolution=merge-duplicates'),
+    saveClubLogo: (name, logo) => rest('POST', 'clubs?on_conflict=name', { name, logo, updated_at: new Date().toISOString() }, 'resolution=merge-duplicates'),
+    saveInvitation: (key, data) => rest('POST', 'invitations?on_conflict=event_key', { event_key: key, data }, 'resolution=merge-duplicates'),
+
     async listLeaders() {
       const [users, invites] = await Promise.all([
-        rest('GET', 'leaders?select=user_id,email,name,role&order=name'),
-        rest('GET', `invites?select=id,email,role,expires_at&expires_at=gt.${new Date().toISOString()}&order=created_at.desc`),
+        rest('GET', 'leaders?select=user_id,email,name,role,planner,teamlead&order=name'),
+        rest('GET', `invites?select=id,email,role,planner,teamlead,expires_at&expires_at=gt.${new Date().toISOString()}&order=created_at.desc`),
       ]);
-      return { users: users.map((u) => ({ id: u.user_id, email: u.email, name: u.name || u.email, role: u.role })), invites: invites.map((i) => ({ id: i.id, email: i.email, role: i.role, expires: i.expires_at })) };
+      return { users: users.map((u) => ({ id: u.user_id, email: u.email, name: u.name || u.email, role: u.role, planner: u.planner, teamlead: u.teamlead })), invites: invites.map((i) => ({ id: i.id, email: i.email, role: i.role, planner: i.planner, teamlead: i.teamlead, expires: i.expires_at })) };
     },
-    async createInvite(email, role) {
+    async createInvite(email, roles = {}) {
       email = String(email || '').trim().toLowerCase();
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new AppError('Ange en giltig e-postadress.');
       const bytes = crypto.getRandomValues(new Uint8Array(24));
       const code = btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
       const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(code)))].map((b) => b.toString(16).padStart(2, '0')).join('');
       await rest('DELETE', `invites?email=eq.${encodeURIComponent(email)}`);
-      const [row] = await rest('POST', 'invites', { email, code_hash: hash, role: role === 'admin' ? 'admin' : 'leader', created_by: uid() }, 'return=representation');
+      const [row] = await rest('POST', 'invites', { email, code_hash: hash, role: roles.admin ? 'admin' : 'leader', planner: !!roles.planner, teamlead: !!roles.teamlead, created_by: uid() }, 'return=representation');
       return { email, expires: row.expires_at, link: `${location.origin}${location.pathname}#/inbjudan/${code}/${encodeURIComponent(email)}` };
     },
     deleteInvite: (id) => rest('DELETE', `invites?id=eq.${id}`),
-    setRole: (userId, role) => rpc('set_leader_role', { p_user: userId, p_role: role }),
+    setRoles: (userId, r) => rpc('set_leader_roles', { p_user: userId, p_admin: !!r.admin, p_planner: !!r.planner, p_teamlead: !!r.teamlead }),
     removeLeader: (userId) => rpc('remove_leader', { p_user: userId }),
     setMyName: (name) => rpc('set_my_name', { p_name: name }),
     saveSettings: (data, rename) => rpc('save_settings', { p_data: data, p_rename: rename || {} }),
     async exportAll() {
-      const tables = ['settings', 'players', 'coaches', 'coach_availability', 'availability', 'schedule', 'schedule_changes', 'rounds', 'history', 'comments', 'leaders'];
+      const tables = ['settings', 'players', 'player_levels', 'coaches', 'coach_availability', 'availability', 'schedule', 'schedule_changes', 'rounds', 'history', 'comments', 'pool_comments', 'routine_categories', 'routines', 'routine_versions', 'team_colors', 'clubs', 'home_events', 'invitations', 'leaders'];
       const out = { exportedAt: new Date().toISOString() };
       for (const t of tables) out[t] = await rest('GET', `${t}?select=*`);
       return out;

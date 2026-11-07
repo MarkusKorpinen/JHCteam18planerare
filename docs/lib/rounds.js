@@ -82,6 +82,20 @@ export const ACTIONS = {
     r.locks.push({ pid: b.pid, key: b.toKey, role: b.role === 'G' ? 'G' : 'S' });
     return `lade till ${name} även i ${label(ctx, b.toKey)} (${b.role === 'G' ? 'målvakt' : 'utespelare'})`;
   },
+  // Byter ut en spelare som inte kan mot en ersättare på samma plats (målvakt eller samma kedja)
+  replace(r, b, ctx) {
+    const outName = playerName(ctx, b.outPid), inName = playerName(ctx, b.inPid);
+    const t = r.teams[b.key] || fail('Okänt lag.');
+    if (t.goalies.includes(b.inPid) || t.lines.some((l) => l.includes(b.inPid))) fail(`${inName} är redan med i laget.`);
+    let role = null;
+    const gi = t.goalies.indexOf(b.outPid);
+    if (gi >= 0) { t.goalies[gi] = b.inPid; role = 'G'; }
+    else for (const l of t.lines) { const i = l.indexOf(b.outPid); if (i >= 0) { l[i] = b.inPid; role = 'S'; break; } }
+    if (!role) fail(`${outName} är inte med i laget.`);
+    r.locks = r.locks.filter((l) => !(l.pid === b.outPid && l.key === b.key));
+    r.locks.push({ pid: b.inPid, key: b.key, role });
+    return `kallade in ${inName} i stället för ${outName} i ${label(ctx, b.key)}`;
+  },
   lock(r, b, ctx) {
     const name = playerName(ctx, b.pid);
     r.locks = r.locks.filter((l) => !(l.pid === b.pid && l.key === b.key));

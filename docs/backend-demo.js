@@ -3,7 +3,7 @@ import { playersFromCsv } from './lib/csv.js';
 import { runSync } from './lib/schedule.js';
 import { newRound, ACTIONS, addLog, snapshot } from './lib/rounds.js';
 
-const KEY = 'jhc-planerare-demo-5';
+const KEY = 'jhc-planerare-demo-6';
 const FIRST = ['Alva', 'Bo', 'Cleo', 'Dante', 'Ebbe', 'Freja', 'Gustav', 'Hedda', 'Isak', 'Juni', 'Kasper', 'Lova', 'Malte', 'Nova', 'Otto', 'Penny', 'Rasmus', 'Saga', 'Tage', 'Ugo', 'Vera', 'Wilmer', 'Ylva', 'Ziggy', 'Alvin', 'Bianca', 'Colin', 'Disa', 'Elton', 'Fanny', 'Gry', 'Hjalmar', 'Ines', 'Jack', 'Kim', 'Leon', 'Majken', 'Nils', 'Olle', 'Pim', 'Rut', 'Sigge'];
 const LAST = ['Ahl', 'Berg', 'Dahl', 'Ek', 'Falk', 'Grahn', 'Holm', 'Lind', 'Mårs', 'Nord', 'Ros', 'Sjö', 'Tall', 'Udd', 'Wik'];
 export function fakeCsv(n = 42) {
@@ -19,11 +19,17 @@ const uuid = () => crypto.randomUUID();
 const now = () => new Date().toISOString();
 const clone = (x) => structuredClone(x);
 const ME = { id: 'demo', email: 'demo@exempel.se', name: 'Demoledare', role: 'admin' };
+export const DEMO_ROLES = { admin: 'Administratör', planner: 'Lagplanerare', teamlead: 'Lagledare', leader: 'Ledare' };
+const SEED_COLORS = { 'Hässelby Kälvesta HC svart': ['Black', 'White'], 'Hässelby Kälvesta HC vit': ['Black', 'White'], 'IK Göta blå': ['Red', 'White'], 'IK Göta svart': ['Red', 'White'], 'Järfälla HC blå': ['Red', 'White'], 'Järfälla HC röd': ['Red', 'White'], 'Järfälla HC vit': ['Red', 'White'], 'Kista HC': ['Black', 'White'], 'Mälarö Hockeyförening blå': ['Blue', 'White'], 'Mälarö Hockeyförening vit': ['Blue', 'White'], 'Sollentuna HC röd': ['Red', 'White'], 'Sollentuna HC vit': ['Red', 'White'], 'Spånga IS IK blå': ['Blue', 'White'], 'Spånga IS IK vit': ['Blue', 'White'], 'Sundbybergs IK grön': ['Green', 'White'], 'Sundbybergs IK vit': ['Green', 'White'], 'Vallentuna Hockey röd': ['Red', 'White'], 'Vallentuna Hockey vit': ['Red', 'White'], 'Väsby IK HK grön': ['Green', 'White'], 'Väsby IK HK vit': ['Green', 'White'] };
 
 export function createDemoBackend({ source = 'demo/schedule.json' } = {}) {
   let db = null;
   try { db = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch {}
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch {} };
+  const meNow = () => {
+    const r = db?.demoRole || 'admin';
+    return { ...ME, role: r === 'admin' ? 'admin' : 'leader', admin: r === 'admin', planner: r === 'admin' || r === 'planner', teamlead: r === 'admin' || r === 'teamlead', demoRole: r };
+  };
   const ctxFor = () => ({
     uppdrag: db.schedule.uppdrag, players: db.players, availability: availMap(), levels: db.settings.levels.map((l) => l.name),
     history: db.history, teamPrefix: db.settings.teamPrefix, me: ME, changes: db.changes, coaches: db.coaches || [], coachAvailability: db.coachAvailability || {},
@@ -48,7 +54,18 @@ export function createDemoBackend({ source = 'demo/schedule.json' } = {}) {
       coaches: ['Anna Andersson', 'Bertil Berg', 'Cecilia Carlsson', 'David Dahl', 'Eva Ek', 'Fredrik Falk', 'Gun Grahn'].map((name, i) => ({ id: uuid(), name, active: true, squad: i >= 5 ? 'reserv' : 'ordinarie', children: [] })),
       coachAvailability: {},
       availability: [], schedule: { uppdrag: {} }, changes: [], rounds: [], history: [], comments: [],
+      demoRole: 'admin', poolComments: [], clubs: {}, invitations: {},
+      teamColors: Object.fromEntries(Object.entries(SEED_COLORS).map(([t, [home, away]]) => [t, { home, away, source: 'swehockey' }])),
+      homeEvents: [], routineCategories: [], routines: [],
     };
+    try { db.homeEvents = await (await fetch('demo/home_events.json')).json(); } catch {}
+    const cat = { id: uuid(), name: 'Föräldrar', sort: 1 };
+    db.routineCategories = [cat, { id: uuid(), name: 'Hemmapoolspel', sort: 2 }, { id: uuid(), name: 'Ledare', sort: 3 }];
+    db.routines = [
+      { id: uuid(), title: 'Kiosken vid hemmapoolspel', categoryId: cat.id, status: 'publicerad', version: 3, createdBy: 'leo', createdByName: 'Leo Ledare', updatedAt: now(), updatedByName: 'Demoledare', publishedAt: now(), publishedByName: 'Demoledare',
+        content: { responsible: '[Namn]', appliesTo: 'Föräldrar i kioskschemat', purpose: 'Kiosken drar in pengar till laget och ska vara bemannad hela poolspelet.', before: ['Hämta kassa och nyckel hos [ansvarig]', 'Sätt på kaffebryggaren och fyll på varor'], during: ['Minst två vuxna i kiosken'], after: ['Räkna kassan tillsammans och fyll i redovisningen', 'Torka av och lämna nyckeln'], problem: 'Ring [ansvarig] på [telefonnummer].' } },
+      { id: uuid(), title: 'Sekretariatet: klocka och protokoll', categoryId: null, status: 'utkast', version: 1, createdBy: 'leo', createdByName: 'Leo Ledare', updatedAt: now(), updatedByName: 'Leo Ledare', content: { purpose: 'Utkast som väntar på en lagledare.', before: [], during: [], after: [] } },
+    ];
     // Ledarbarn: varje ordinarie tränare utom en har ett barn bland de ordinarie spelarna
     [1, 7, 13, 19, 6].forEach((pi, ci) => { db.coaches[ci].children = [db.players[pi].id]; });
     db.coaches[5].children = [db.players[25].id];
@@ -78,15 +95,21 @@ export function createDemoBackend({ source = 'demo/schedule.json' } = {}) {
   const findRound = (id) => db.rounds.find((r) => r.id === id) || (() => { throw new Error('Omgången finns inte.'); })();
   return {
     mode: 'demo',
-    async me() { if (!db) await seed(); return ME; },
+    async me() { if (!db) await seed(); return meNow(); },
+    async setDemoRole(r) { db.demoRole = r; save(); return meNow(); },
     async reset() { localStorage.removeItem(KEY); db = null; await seed(); },
     async logout() {},
     async loadState() {
+      const me = meNow();
+      const plan = me.planner;
       return {
-        settings: clone(db.settings), players: clone(db.players), coaches: clone(db.coaches || []), coachAvailability: clone(db.coachAvailability || {}), availability: availMap(), schedule: clone(db.schedule),
+        poolComments: clone(db.poolComments || []), teamColors: clone(db.teamColors || {}), clubs: clone(db.clubs || {}), homeEvents: clone(db.homeEvents || []),
+        invitations: clone(db.invitations || {}), routineCategories: clone(db.routineCategories || []),
+        routines: clone((db.routines || []).filter((r) => r.status === 'publicerad' || me.teamlead || r.createdBy === ME.id)).map((r) => { delete r.content; return r; }),
+        settings: clone(db.settings), players: clone(db.players).map((p) => (plan ? p : { ...p, level: null })), coaches: clone(db.coaches || []), coachAvailability: plan ? clone(db.coachAvailability || {}) : {}, availability: plan ? availMap() : {}, schedule: clone(db.schedule),
         changes: clone(db.changes),
-        rounds: db.rounds.map((r) => ({ id: r.id, name: r.name, status: r.status, keys: r.keys, createdAt: r.createdAt, updatedAt: r.updatedAt, updatedByName: r.updatedByName, confirmedAt: r.confirmedAt })),
-        history: clone(db.history),
+        rounds: db.rounds.filter((r) => plan || r.status === 'fastställt').map((r) => ({ id: r.id, name: r.name, status: r.status, keys: r.keys, createdAt: r.createdAt, updatedAt: r.updatedAt, updatedByName: r.updatedByName, confirmedAt: r.confirmedAt })),
+        history: plan ? clone(db.history) : [],
       };
     },
     async addPlayer(p) { const x = { id: uuid(), name: p.name, level: p.level, canGoalie: !!p.canGoalie, squad: p.squad === 'reserv' ? 'reserv' : 'ordinarie', active: true }; db.players.push(x); save(); return x; },
@@ -129,7 +152,30 @@ export function createDemoBackend({ source = 'demo/schedule.json' } = {}) {
     async deleteRound(id) { db.rounds = db.rounds.filter((r) => r.id !== id); save(); },
     async addComment(roundId, key, text) { db.comments.push({ id: uuid(), roundId, key, userId: ME.id, name: ME.name, text, at: now() }); save(); },
     async deleteComment(id) { db.comments = db.comments.filter((c) => c.id !== id); save(); },
-    async listLeaders() { return { users: [ME, { id: 'leo', email: 'leo@exempel.se', name: 'Leo Ledare', role: 'leader' }], invites: [] }; },
+    async listLeaders() { return { users: [{ ...ME, planner: true, teamlead: true }, { id: 'leo', email: 'leo@exempel.se', name: 'Leo Ledare', role: 'leader', planner: false, teamlead: true }], invites: [] }; },
+    async setRoles() {},
+    async addPoolComment(key, text) { (db.poolComments ||= []).push({ id: uuid(), key, userId: ME.id, name: ME.name, text, at: now(), readBy: [ME.id] }); save(); },
+    async deletePoolComment(id) { db.poolComments = db.poolComments.filter((c) => c.id !== id); save(); },
+    async markPoolRead(key) { for (const c of db.poolComments || []) if (c.key === key && !c.readBy.includes(ME.id)) c.readBy.push(ME.id); save(); },
+    async getRoutine(id) { const r = (db.routines || []).find((x) => x.id === id); if (!r) throw new Error('Rutinen finns inte.'); return clone(r); },
+    async saveRoutine(r) {
+      const me = meNow();
+      if (!me.teamlead && (r.status === 'publicerad' || r.categoryId)) throw new Error('Bara lagledare kan publicera rutiner och välja kategori.');
+      const old = r.id && db.routines.find((x) => x.id === r.id);
+      if (old && !me.teamlead && old.createdBy !== ME.id) throw new Error('Du kan bara ändra dina egna utkast.');
+      const x = { ...(old || { id: uuid(), createdBy: ME.id, createdByName: ME.name, version: 0 }), title: r.title, categoryId: r.categoryId || null, status: r.status || 'utkast', content: r.content || {} };
+      x.version += 1; x.updatedAt = now(); x.updatedByName = ME.name;
+      if (x.status === 'publicerad' && old?.status !== 'publicerad') { x.publishedAt = now(); x.publishedByName = ME.name; }
+      db.routines = [...db.routines.filter((y) => y.id !== x.id), x]; save();
+      return x.id;
+    },
+    async deleteRoutine(id) { db.routines = db.routines.filter((r) => r.id !== id); save(); },
+    async addCategory(name, sort) { db.routineCategories.push({ id: uuid(), name, sort: sort || 0 }); save(); },
+    async updateCategory(id, patch) { Object.assign(db.routineCategories.find((c) => c.id === id), patch); save(); },
+    async deleteCategory(id) { db.routineCategories = db.routineCategories.filter((c) => c.id !== id); for (const r of db.routines) if (r.categoryId === id) r.categoryId = null; save(); },
+    async saveTeamColor(team, home, away) { db.teamColors[team] = { home, away, source: 'manual' }; save(); },
+    async saveClubLogo(name, logo) { db.clubs[name] = { logo }; save(); },
+    async saveInvitation(key, data) { db.invitations[key] = { ...data, updatedAt: now(), updatedByName: ME.name }; save(); },
     async createInvite(email) { return { email, expires: new Date(Date.now() + 7 * 864e5).toISOString(), link: `${location.origin}${location.pathname}#/inbjudan/DEMO-KOD/${encodeURIComponent(email)}` }; },
     async deleteInvite() {}, async setRole() {}, async removeLeader() {}, async setMyName() {},
     async saveSettings(data, rename) {
