@@ -9,8 +9,8 @@ export const RULES = [
   'Bara aktiva spelare som inte är markerade ”kan inte” för poolspelet tas ut.',
   'Varje lag ska ha minst en ledare. Ordinarie ledare följer med sitt barn, så förslaget sprider ledarbarnen över lagen. Spelar två lag på samma plats samma dag räcker det att platsen har lika många ledare som lag; ledarbarnen kan då spela i samma lag och en ledare leder det andra laget.',
   'Räcker inte ledarbarnen fördelas ordinarie ledare utan barn i spel (den som varit med minst går först). Reservledare läggs till manuellt med ”Välj tränare”.',
-  'Förslaget använder bara ordinarie spelare. Reserver läggs till manuellt av ledarna (knappen ”Lägg till reserv” på lagkortet). Låsta reserver ligger kvar vid nytt förslag.',
-  'En spelare tas aldrig ut i två poolspel samma dag (tidskrock). Spelare kan inte heller tas ut fler gånger i omgången än inställningen ”Max poolspel per spelare”.',
+  'Förslaget använder bara ordinarie spelare. Reserver läggs till manuellt av ledarna (knappen ”+ Lägg till spelare” på lagkortet). Låsta reserver ligger kvar vid nytt förslag.',
+  'Förslaget tar ut varje spelare högst en gång per omgång, och aldrig i två poolspel samma dag. Vill ni att en spelare spelar i två lag lägger ni till det manuellt med ”+ Lägg till spelare”.',
   'Låsta placeringar läggs in först och flyttas aldrig av ett nytt förslag.',
   'Målvakter väljs bara bland spelare som kan stå i mål. Den som stått i mål minst antal gånger i fastställda lag går först.',
   'Utespelare fördelas så att varje nivågrupp blir så jämnt spridd som möjligt mellan lagen. Spelare med minst antal möjliga poolspel placeras först. Vid lika går den som spelat minst antal poolspel hittills före.',
@@ -78,7 +78,7 @@ const res = (p) => (isReserve(p) ? 1 : 0);
  * @param {number} o.seed
  */
 export function propose(o) {
-  const s = { ...DEFAULT_ROUND_SETTINGS, ...(o.settings || {}) };
+  const s = { ...DEFAULT_ROUND_SETTINGS, ...(o.settings || {}), maxPerPlayer: 1 }; // automatiskt: en gång per omgång
   const rand = rng(o.seed ?? 1);
   const levels = o.levels || [];
   const rank = (p) => { const i = levels.indexOf(p.level); return i < 0 ? levels.length : i; };
@@ -352,8 +352,8 @@ export function validate({ round, uppdragMap, players, availability, levels, coa
     const dates = new Map();
     for (const pl of list) { if (!dates.has(pl.date)) dates.set(pl.date, []); dates.get(pl.date).push(pl.key); }
     for (const [, keys] of dates) if (keys.length > 1) for (const k of keys)
-      perTeam[k].push({ level: 'error', text: `${name(pid)} är uttagen i ${keys.length} poolspel samma dag.` });
-    if (list.length > s.maxPerPlayer) global.push({ level: 'warn', text: `${name(pid)} är uttagen ${list.length} gånger (max ${s.maxPerPlayer}).` });
+      perTeam[k].push({ level: 'warn', text: `${name(pid)} är uttagen i ${keys.length} poolspel samma dag. Kontrollera att tiderna går ihop.` });
+    if (list.length > 1) global.push({ level: 'info', text: `${name(pid)} spelar i ${list.length} lag i omgången.` });
   }
   // Tränare i två poolspel samma dag
   const coachName = (id) => coaches.find((c) => c.id === id)?.name || 'Okänd tränare';

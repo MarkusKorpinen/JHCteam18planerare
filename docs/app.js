@@ -353,7 +353,7 @@ function teamCard(key) {
       <h4>Tränare</h4>
       <div class="chips">${(t.coaches || []).map((id) => `<span class="coach${!coachAvail(key, id) ? ' bad' : ''}">${esc(C(id)?.name || 'Okänd tränare')}${isReserve(C(id)) ? '<span class="res">R</span>' : ''}${(r.coachLocks || []).some((l) => l.cid === id && l.key === key) ? '<span class="lock">🔒</span>' : ''}</span>`).join('') || '<span class="empty">Ingen ledare</span>'}</div>
       <div class="row cardactions">
-        ${r.status !== 'fastställt' ? `<button class="btn small" data-act="addreserve" data-key="${esc(key)}">+ Lägg till reserv</button>` : ''}
+        ${r.status !== 'fastställt' ? `<button class="btn small" data-act="addreserve" data-key="${esc(key)}">+ Lägg till spelare</button>` : ''}
         <button class="btn small" data-act="coaches" data-key="${esc(key)}">Välj tränare</button>
       </div>
       <div class="row cardactions">
@@ -392,12 +392,11 @@ function renderRound(keepScroll) {
   </section>
   ${S.view.validation.global.map((x) => `<div class="alert warn">${esc(x.text)}</div>`).join('')}
   <details class="panel">
-    <summary><strong>Inställningar för förslaget</strong> <span class="small muted">${s.skaters} utespelare · ${s.goalies} målvakt · kedja ${s.lineSize} · max ${s.maxPerPlayer} poolspel/spelare</span></summary>
+    <summary><strong>Inställningar för förslaget</strong> <span class="small muted">${s.skaters} utespelare · ${s.goalies} målvakt · kedja ${s.lineSize}</span></summary>
     <form id="rset" class="grid4">
       <label>Utespelare per lag<input type="number" name="skaters" min="1" max="20" value="${s.skaters}"></label>
       <label>Målvakter per lag<input type="number" name="goalies" min="0" max="3" value="${s.goalies}"></label>
       <label>Spelare per kedja<input type="number" name="lineSize" min="1" max="10" value="${s.lineSize}"></label>
-      <label>Max poolspel per spelare i omgången<input type="number" name="maxPerPlayer" min="1" max="10" value="${s.maxPerPlayer}"></label>
       <button class="btn" ${confirmed ? 'disabled' : ''}>Spara inställningar</button>
     </form>
     <p class="small muted">Ändrade inställningar används nästa gång du skapar ett förslag.</p>
@@ -714,7 +713,7 @@ async function viewLeaders() {
         <label>Utespelare<input type="number" name="skaters" min="1" max="20" value="${st.roundDefaults.skaters}"></label>
         <label>Målvakter<input type="number" name="goalies" min="0" max="3" value="${st.roundDefaults.goalies}"></label>
         <label>Kedjestorlek<input type="number" name="lineSize" min="1" max="10" value="${st.roundDefaults.lineSize}"></label>
-        <label>Max poolspel/spelare<input type="number" name="maxPerPlayer" min="1" max="10" value="${st.roundDefaults.maxPerPlayer}"></label></div></fieldset>
+</div></fieldset>
       <button class="btn">Spara inställningar</button>
     </form>
   </section>
@@ -756,7 +755,7 @@ async function viewLeaders() {
     if (!(hours >= 1 && hours <= 168)) return toast('Synkintervallet ska vara 1–168 timmar.', true);
     const rename = {};
     st.levels.forEach((l, i) => { if (l.name !== levels[i].name) rename[l.name] = levels[i].name; });
-    const rd = Object.fromEntries(['skaters', 'goalies', 'lineSize', 'maxPerPlayer'].map((k) => [k, parseInt(f[k].value, 10) || 0]));
+    const rd = { ...Object.fromEntries(['skaters', 'goalies', 'lineSize'].map((k) => [k, parseInt(f[k].value, 10) || 0])), maxPerPlayer: 1 };
     try { await B.saveSettings({ ...st, levels, teamPrefix: f.teamPrefix.value.trim(), syncHours: hours, roundDefaults: rd }, rename); await refreshState(); toast('Inställningarna är sparade.'); viewLeaders(); }
     catch (err) { toast(err.message, true); }
   };
@@ -794,27 +793,41 @@ function reserveDialog(key) {
   const list = S.state.players.filter((p) => p.active !== false && isReserve(p) && isAvail(key, p.id) && !busyOnDate(p.id, u?.date))
     .sort((a, b) => (apps.get(a.id) || 0) - (apps.get(b.id) || 0) || a.name.localeCompare(b.name, 'sv'));
   const t = S.round.teams[key];
+  const inTeam = new Set([...t.goalies, ...t.lines.flat()]);
+  const placedSomewhere = (pid) => S.round.keys.some((k) => [...S.round.teams[k].goalies, ...S.round.teams[k].lines.flat()].includes(pid));
+  const extras = S.state.players.filter((p) => p.active !== false && !isReserve(p) && !inTeam.has(p.id) && placedSomewhere(p.id) && isAvail(key, p.id))
+    .sort((a, b) => a.name.localeCompare(b.name, 'sv'));
+  const where = (pid) => S.round.keys.filter((k) => [...S.round.teams[k].goalies, ...S.round.teams[k].lines.flat()].includes(pid)).map((k) => `${U(k)?.label.replace('U9 ', '')}${U(k)?.date === u?.date ? ', samma dag!' : ''}`).join('; ');
+  const freeOrd = S.state.players.filter((p) => p.active !== false && !isReserve(p) && !placedSomewhere(p.id) && isAvail(key, p.id)).sort((a, b) => a.name.localeCompare(b.name, 'sv'));
+  const opt = (p, extra) => `<option value="${p.id}" data-extra="${extra ? 1 : 0}">${esc(p.name)}${p.canGoalie ? ' (MV)' : ''}${extra ? ` – spelar redan i ${esc(where(p.id))}` : ` – ${apps.get(p.id) || 0} poolspel`}</option>`;
+  const any = list.length || extras.length || freeOrd.length;
   const dlg = $('#dlg');
   dlg.innerHTML = `
   <form method="dialog" class="stack">
-    <h2>Lägg till reserv</h2>
+    <h2>Lägg till spelare</h2>
     <p class="small">${esc(u?.label)} · ${fDate(u?.date)}</p>
-    ${list.length ? `
-    <label>Reserv <span class="small muted">(färst spelade poolspel överst)</span>
-      <select name="pid">${list.map((p) => `<option value="${p.id}">${esc(p.name)}${p.canGoalie ? ' (MV)' : ''} – ${apps.get(p.id) || 0} poolspel</option>`).join('')}</select>
+    ${any ? `
+    <label>Spelare
+      <select name="pid">
+        ${list.length ? `<optgroup label="Reserver (färst spelade poolspel överst)">${list.map((p) => opt(p, false)).join('')}</optgroup>` : ''}
+        ${freeOrd.length ? `<optgroup label="Ordinarie som inte är uttagna">${freeOrd.map((p) => opt(p, false)).join('')}</optgroup>` : ''}
+        ${extras.length ? `<optgroup label="Ordinarie som redan spelar i ett annat lag (spelar två gånger)">${extras.map((p) => opt(p, true)).join('')}</optgroup>` : ''}
+      </select>
     </label>
     <label>Roll
       <select name="role"><option value="S">Utespelare${t.lines.length ? ` (kedja ${t.lines.length})` : ''}</option><option value="SN">Utespelare, ny kedja</option><option value="G">Målvakt</option></select>
     </label>
-    <p class="small muted">Reserven låses i laget så att den ligger kvar om ni skapar ett nytt förslag.</p>` : '<p>Det finns ingen ledig reserv som kan det här poolspelet. Markera spelare som reserv under Spelare, eller kontrollera tillgängligheten.</p>'}
-    <div class="row">${list.length ? '<button class="btn primary" value="save">Lägg till</button>' : ''}<button class="btn" value="cancel" formnovalidate>Avbryt</button></div>
+    <p class="small muted">Spelaren låses i laget så att den ligger kvar om ni skapar ett nytt förslag. Väljer du en ordinarie som redan spelar i ett annat lag blir hen kvar där också.</p>` : '<p>Det finns ingen ledig spelare som kan det här poolspelet. Kontrollera tillgängligheten eller markera fler spelare som reserv.</p>'}
+    <div class="row">${any ? '<button class="btn primary" value="save">Lägg till</button>' : ''}<button class="btn" value="cancel" formnovalidate>Avbryt</button></div>
   </form>`;
   dlg.showModal();
   dlg.onclose = async () => {
     if (dlg.returnValue !== 'save') return;
     const f = dlg.querySelector('form');
     const role = f.role.value;
-    await act('move', { pid: f.pid.value, fromKey: null, toKey: key, role: role === 'G' ? 'G' : 'S', line: role === 'S' && t.lines.length ? t.lines.length - 1 : null, lock: true });
+    const extra = f.pid.selectedOptions[0]?.dataset.extra === '1';
+    const args = { pid: f.pid.value, toKey: key, role: role === 'G' ? 'G' : 'S', line: role === 'S' && t.lines.length ? t.lines.length - 1 : null };
+    await act(extra ? 'addExtra' : 'move', extra ? args : { ...args, fromKey: null, lock: true });
   };
 }
 function coachDialog(key) {

@@ -66,6 +66,22 @@ export const ACTIONS = {
     } else if (lock) r.locks = r.locks.filter((l) => l !== lock);
     return `flyttade ${name} till ${b.toKey ? `${label(ctx, b.toKey)} (${b.role === 'G' ? 'målvakt' : 'utespelare'})` : 'ej uttagna'}`;
   },
+  // Lägger till en redan uttagen spelare i ytterligare ett lag (bara manuellt). Båda placeringarna låses.
+  addExtra(r, b, ctx) {
+    const name = playerName(ctx, b.pid);
+    if (!r.keys.includes(b.toKey)) fail('Okänt lag.');
+    const t = (r.teams[b.toKey] ||= emptyTeam());
+    if (t.goalies.includes(b.pid) || t.lines.some((l) => l.includes(b.pid))) fail(`${name} är redan med i laget.`);
+    for (const k of r.keys) {
+      const role = roleOf(r.teams[k], b.pid);
+      if (role && !r.locks.some((l) => l.pid === b.pid && l.key === k)) r.locks.push({ pid: b.pid, key: k, role });
+    }
+    if (b.role === 'G') t.goalies.push(b.pid);
+    else if (Number.isInteger(b.line) && b.line >= 0 && b.line < t.lines.length) t.lines[b.line].push(b.pid);
+    else t.lines.push([b.pid]);
+    r.locks.push({ pid: b.pid, key: b.toKey, role: b.role === 'G' ? 'G' : 'S' });
+    return `lade till ${name} även i ${label(ctx, b.toKey)} (${b.role === 'G' ? 'målvakt' : 'utespelare'})`;
+  },
   lock(r, b, ctx) {
     const name = playerName(ctx, b.pid);
     r.locks = r.locks.filter((l) => !(l.pid === b.pid && l.key === b.key));
@@ -74,13 +90,13 @@ export const ACTIONS = {
   },
   settings(r, b) {
     const s = {};
-    for (const [k, min, max] of [['skaters', 1, 20], ['goalies', 0, 3], ['lineSize', 1, 10], ['maxPerPlayer', 1, 10]]) {
+    for (const [k, min, max] of [['skaters', 1, 20], ['goalies', 0, 3], ['lineSize', 1, 10]]) {
       const v = Number(b.settings?.[k]);
       if (!Number.isInteger(v) || v < min || v > max) fail('Ogiltigt värde i inställningarna.');
       s[k] = v;
     }
-    r.settings = s;
-    return `ändrade inställningarna till ${s.skaters} utespelare, ${s.goalies} målvakt, kedja ${s.lineSize}, max ${s.maxPerPlayer} poolspel`;
+    r.settings = { ...r.settings, ...s, maxPerPlayer: 1 };
+    return `ändrade inställningarna till ${s.skaters} utespelare, ${s.goalies} målvakt, kedja ${s.lineSize}`;
   },
   setKeys(r, b, ctx) {
     const keys = [...new Set(b.keys || [])];
