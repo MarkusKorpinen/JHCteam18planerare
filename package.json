@@ -1,0 +1,12 @@
+{
+  "name": "jhc-lagplanerare",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Lagplanerare för Järfälla HC U9 – GitHub Pages + Supabase",
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "test:sql": "sh supabase/test/run.sh",
+    "preview": "python3 -m http.server 8080 -d docs"
+  }
+}
