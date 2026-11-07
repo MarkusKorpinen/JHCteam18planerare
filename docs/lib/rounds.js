@@ -38,11 +38,12 @@ export const ACTIONS = {
   propose(r, b, ctx) {
     const seed = Number.isInteger(b.seed) ? b.seed : (Date.now() ^ Math.floor(Math.random() * 1e9)) >>> 0;
     const res = propose({
-      uppdrag: r.keys.map((k) => ({ key: k, date: ctx.uppdrag[k]?.date || k })),
+      uppdrag: r.keys.map((k) => ({ key: k, date: ctx.uppdrag[k]?.date || k, venue: ctx.uppdrag[k]?.venue })),
       players: ctx.players, availability: ctx.availability, locks: r.locks, settings: r.settings,
+      coaches: ctx.coaches || [], coachAvailability: ctx.coachAvailability || {}, coachLocks: r.coachLocks || [],
       levels: ctx.levels, history: (ctx.history || []).filter((h) => h.roundId !== r.id), seed,
     });
-    for (const k of r.keys) r.teams[k] = { ...(r.teams[k] || {}), goalies: res.teams[k].goalies, lines: res.teams[k].lines };
+    for (const k of r.keys) r.teams[k] = { ...(r.teams[k] || {}), goalies: res.teams[k].goalies, lines: res.teams[k].lines, coaches: res.teams[k].coaches };
     r.lastSeed = seed;
     return 'skapade ett nytt förslag';
   },
@@ -87,6 +88,7 @@ export const ACTIONS = {
     for (const k of keys) r.teams[k] ||= emptyTeam();
     for (const k of r.keys) if (!keys.includes(k)) delete r.teams[k];
     r.locks = r.locks.filter((l) => keys.includes(l.key));
+    r.coachLocks = (r.coachLocks || []).filter((l) => keys.includes(l.key));
     r.keys = sortKeys(keys, ctx.uppdrag);
     return 'ändrade vilka poolspel som ingår';
   },
@@ -94,6 +96,8 @@ export const ACTIONS = {
     const t = r.teams[b.key] || fail('Okänt lag.');
     const ids = [...new Set(b.ids || [])];
     t.coaches = ids;
+    // Manuellt valda tränare låses så att de ligger kvar vid nytt förslag
+    r.coachLocks = [...(r.coachLocks || []).filter((l) => l.key !== b.key), ...ids.map((cid) => ({ cid, key: b.key }))];
     const names = ids.map((id) => (ctx.coaches || []).find((c) => c.id === id)?.name).filter(Boolean);
     return `valde tränare för ${label(ctx, b.key)}: ${names.join(', ') || 'inga'}`;
   },
@@ -124,7 +128,7 @@ export function pendingReview(r, key, changes) {
 
 export function view(r, ctx) {
   const withReview = { ...r, teams: Object.fromEntries(r.keys.map((k) => [k, { ...(r.teams[k] || emptyTeam()), review: pendingReview(r, k, ctx.changes).map((c) => ({ at: c.at, items: c.items, ack: false })) }])) };
-  const validation = validate({ round: withReview, uppdragMap: ctx.uppdrag, players: ctx.players, availability: ctx.availability, levels: ctx.levels, coaches: ctx.coaches || [] });
+  const validation = validate({ round: withReview, uppdragMap: ctx.uppdrag, players: ctx.players, availability: ctx.availability, levels: ctx.levels, coaches: ctx.coaches || [], coachAvailability: ctx.coachAvailability || {} });
   const copy = {};
   for (const k of r.keys) copy[k] = rosterText(teamName(ctx, k), r.teams[k], ctx.players);
   copy.all = r.keys.map((k) => copy[k]).join('\n\n\n');

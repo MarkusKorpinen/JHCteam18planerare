@@ -42,8 +42,10 @@ const opponent = (u, m) => (m.home === u?.teamName ? m.away : m.home);
 const ctx = () => ({
   uppdrag: S.state.schedule.uppdrag || {}, players: S.state.players, availability: S.state.availability,
   levels: levelNames(), history: S.state.history, teamPrefix: S.state.settings.teamPrefix, me: S.me, changes: S.state.changes,
-  coaches: S.state.coaches || [],
+  coaches: S.state.coaches || [], coachAvailability: S.state.coachAvailability || {},
 });
+const coachAvail = (key, cid) => S.state.coachAvailability?.[key]?.[cid] !== false;
+const parentsOf = (pid) => (S.state.coaches || []).filter((c) => c.active !== false && (c.children || []).includes(pid));
 const C = (id) => (S.state.coaches || []).find((c) => c.id === id);
 const teamFullName = (key) => `${S.state.settings.teamPrefix || ''} ${U(key)?.label || ''}`.trim();
 
@@ -311,7 +313,7 @@ function chip(pid, key) {
   if (!p) return '<span class="pl gone">Okänd spelare</span>';
   const bad = key && !isAvail(key, pid);
   return `<button class="pl${bad ? ' bad' : ''}" data-act="player" data-pid="${pid}" data-key="${esc(key || '')}" title="${esc(p.level)}${p.canGoalie ? ', kan stå i mål' : ''}">
-    <span class="ldot" style="--c:${levelColor(p.level)}"></span>${esc(p.name)}${p.canGoalie ? '<span class="mv">MV</span>' : ''}${isReserve(p) ? '<span class="res" title="Reserv">R</span>' : ''}${key && isLocked(pid, key) ? '<span class="lock" aria-label="låst">🔒</span>' : ''}</button>`;
+    <span class="ldot" style="--c:${levelColor(p.level)}"></span>${esc(p.name)}${p.canGoalie ? '<span class="mv">MV</span>' : ''}${isReserve(p) ? '<span class="res" title="Reserv">R</span>' : ''}${parentsOf(pid).length ? `<span class="lk" title="Ledarbarn: ${esc(parentsOf(pid).map((c) => c.name).join(', '))}">L</span>` : ''}${key && isLocked(pid, key) ? '<span class="lock" aria-label="låst">🔒</span>' : ''}</button>`;
 }
 
 function teamCard(key) {
@@ -349,7 +351,7 @@ function teamCard(key) {
       <div class="chips">${t.goalies.map((id) => chip(id, key)).join('') || '<span class="empty">Ingen målvakt</span>'}</div>
       ${t.lines.map((l, i) => `<h4>Kedja ${i + 1} <span class="muted small">(${l.length})</span></h4><div class="chips">${l.map((id) => chip(id, key)).join('')}</div>`).join('') || '<h4>Utespelare</h4><span class="empty">Inga utespelare</span>'}
       <h4>Tränare</h4>
-      <div class="chips">${(t.coaches || []).map((id) => `<span class="coach">${esc(C(id)?.name || 'Okänd tränare')}</span>`).join('') || '<span class="muted small">Ingen tränare vald</span>'}</div>
+      <div class="chips">${(t.coaches || []).map((id) => `<span class="coach${!coachAvail(key, id) ? ' bad' : ''}">${esc(C(id)?.name || 'Okänd tränare')}${isReserve(C(id)) ? '<span class="res">R</span>' : ''}${(r.coachLocks || []).some((l) => l.cid === id && l.key === key) ? '<span class="lock">🔒</span>' : ''}</span>`).join('') || '<span class="empty">Ingen ledare</span>'}</div>
       <div class="row cardactions">
         ${r.status !== 'fastställt' ? `<button class="btn small" data-act="addreserve" data-key="${esc(key)}">+ Lägg till reserv</button>` : ''}
         <button class="btn small" data-act="coaches" data-key="${esc(key)}">Välj tränare</button>
@@ -415,7 +417,10 @@ function renderRound(keepScroll) {
     <div class="tablewrap"><table class="avail">
       <thead><tr><th>Spelare</th>${r.keys.map((k) => `<th><span class="tdot" style="--c:${teamColor(U(k))}"></span>${esc((U(k)?.label || '').replace('U9 ', ''))}<br><span class="small">${fDate(U(k)?.date)}</span></th>`).join('')}</tr></thead>
       <tbody>${players.map((p) => `<tr><th><span class="ldot" style="--c:${levelColor(p.level)}"></span>${esc(p.name)}${p.canGoalie ? ' <span class="mv">MV</span>' : ''}${isReserve(p) ? '<span class="res">R</span>' : ''}</th>
-        ${r.keys.map((k) => `<td><label class="tog"><input type="checkbox" data-act="avail" data-key="${esc(k)}" data-pid="${p.id}" ${isAvail(k, p.id) ? 'checked' : ''}><span>${isAvail(k, p.id) ? 'Kan' : 'Kan inte'}</span></label></td>`).join('')}</tr>`).join('')}</tbody>
+        ${r.keys.map((k) => `<td><label class="tog"><input type="checkbox" data-act="avail" data-key="${esc(k)}" data-pid="${p.id}" ${isAvail(k, p.id) ? 'checked' : ''}><span>${isAvail(k, p.id) ? 'Kan' : 'Kan inte'}</span></label></td>`).join('')}</tr>`).join('')}
+      <tr><th colspan="${r.keys.length + 1}" class="subhead">Tränare</th></tr>
+      ${(S.state.coaches || []).filter((c) => c.active !== false).sort((a, b) => res(a) - res(b) || a.name.localeCompare(b.name, 'sv')).map((c) => `<tr><th>${esc(c.name)}${isReserve(c) ? '<span class="res">R</span>' : ''}</th>
+        ${r.keys.map((k) => `<td><label class="tog"><input type="checkbox" data-act="cavail" data-key="${esc(k)}" data-cid="${c.id}" ${coachAvail(k, c.id) ? 'checked' : ''}><span>${coachAvail(k, c.id) ? 'Kan' : 'Kan inte'}</span></label></td>`).join('')}</tr>`).join('')}</tbody>
     </table></div>
   </details>
   <details class="panel">
@@ -536,8 +541,11 @@ function viewPlayers() {
   </section>
   <section class="panel">
     <h2>Tränare</h2>
-    <p class="small muted">Tränarna väljs per lag i omgången och skrivs ut på laglistan (PDF).</p>
-    <ul class="users">${[...(S.state.coaches || [])].sort((a, b) => (a.active === false) - (b.active === false) || a.name.localeCompare(b.name, 'sv')).map((c) => `<li class="${c.active === false ? 'archived' : ''}">${esc(c.name)}
+    <p class="small muted">Koppla varje tränare till sitt barn. Förslagen sprider ledarbarnen så att varje lag får minst en ledare, och ordinarie ledare följer med sitt barn. Reservledare väljs manuellt på lagkortet.</p>
+    <ul class="users">${[...(S.state.coaches || [])].sort((a, b) => (a.active === false) - (b.active === false) || res(a) - res(b) || a.name.localeCompare(b.name, 'sv')).map((c) => `<li class="${c.active === false ? 'archived' : ''}"><strong>${esc(c.name)}</strong>
+      <select data-act="csquad" data-id="${c.id}" class="${isReserve(c) ? 'isres' : ''}" aria-label="Grupp för ${esc(c.name)}"><option value="ordinarie" ${!isReserve(c) ? 'selected' : ''}>Ordinarie</option><option value="reserv" ${isReserve(c) ? 'selected' : ''}>Reserv</option></select>
+      <span class="small">Barn: ${(c.children || []).map((id) => esc(P(id)?.name || '?')).join(', ') || '<span class="muted">inget kopplat</span>'}</span>
+      <button class="linkbtn" data-act="coachkids" data-id="${c.id}">välj barn</button>
       <button class="linkbtn" data-act="coachrename" data-id="${c.id}">byt namn</button>
       <button class="linkbtn" data-act="coacharchive" data-id="${c.id}" data-on="${c.active === false ? 1 : 0}">${c.active === false ? 'återställ' : 'arkivera'}</button></li>`).join('') || '<li class="muted">Inga tränare ännu.</li>'}</ul>
     <div class="row wrapform"><input id="newcoach" placeholder="Tränarens namn" maxlength="60"><button class="btn" data-act="addcoach">Lägg till tränare</button></div>
@@ -813,13 +821,16 @@ function coachDialog(key) {
   const u = U(key), t = S.round.teams[key];
   const chosen = new Set(t.coaches || []);
   const elsewhere = (cid) => S.round.keys.filter((k) => k !== key && U(k)?.date === u?.date && (S.round.teams[k].coaches || []).includes(cid)).map((k) => U(k)?.label);
-  const list = (S.state.coaches || []).filter((c) => c.active !== false || chosen.has(c.id)).sort((a, b) => a.name.localeCompare(b.name, 'sv'));
+  const kids = new Set([...t.goalies, ...t.lines.flat()]);
+  const list = (S.state.coaches || []).filter((c) => c.active !== false || chosen.has(c.id)).sort((a, b) => res(a) - res(b) || a.name.localeCompare(b.name, 'sv'));
+  const notes = (c) => [isReserve(c) ? 'reserv' : '', !coachAvail(key, c.id) ? 'kan inte' : '', (c.children || []).some((id) => kids.has(id)) ? 'barn i laget' : ''].filter(Boolean);
   const dlg = $('#dlg');
   dlg.innerHTML = `
   <form method="dialog" class="stack">
     <h2>Tränare</h2>
     <p class="small">${esc(u?.label)} · ${fDate(u?.date)}</p>
-    ${list.length ? list.map((c) => { const o = elsewhere(c.id); return `<label class="check"><input type="checkbox" name="c" value="${c.id}" ${chosen.has(c.id) ? 'checked' : ''}> ${esc(c.name)}${o.length ? ` <span class="small muted">(vald i ${esc(o.join(', '))} samma dag)</span>` : ''}</label>`; }).join('')
+    <p class="small muted">Valda tränare låses i laget och ligger kvar om ni skapar ett nytt förslag.</p>
+    ${list.length ? list.map((c) => { const o = elsewhere(c.id); const n = notes(c); return `<label class="check"><input type="checkbox" name="c" value="${c.id}" ${chosen.has(c.id) ? 'checked' : ''}> ${esc(c.name)}${n.length ? ` <span class="small muted">(${esc(n.join(', '))})</span>` : ''}${o.length ? ` <span class="small muted">(vald i ${esc(o.join(', '))} samma dag)</span>` : ''}</label>`; }).join('')
       : '<p>Inga tränare finns ännu. Lägg till dem under <strong>Spelare → Tränare</strong>.</p>'}
     <div class="row">${list.length ? '<button class="btn primary" value="save">Spara</button>' : ''}<button class="btn" value="cancel" formnovalidate>Avbryt</button></div>
   </form>`;
@@ -829,6 +840,27 @@ function coachDialog(key) {
     const ids = [...dlg.querySelectorAll('input[name=c]:checked')].map((x) => x.value);
     if (S.round.status === 'fastställt') { toast('Öppna omgången som utkast för att ändra tränare.', true); return; }
     await act('setCoaches', { key, ids });
+  };
+}
+
+function kidsDialog(cid) {
+  const c = C(cid);
+  const chosen = new Set(c.children || []);
+  const ps = S.state.players.filter((p) => p.active !== false || chosen.has(p.id)).sort((a, b) => a.name.localeCompare(b.name, 'sv'));
+  const dlg = $('#dlg');
+  dlg.innerHTML = `
+  <form method="dialog" class="stack">
+    <h2>Barn till ${esc(c.name)}</h2>
+    <input type="search" placeholder="Sök spelare" id="kidsearch">
+    <div class="kidlist">${ps.map((p) => `<label class="check" data-name="${esc(p.name.toLowerCase())}"><input type="checkbox" name="k" value="${p.id}" ${chosen.has(p.id) ? 'checked' : ''}> ${esc(p.name)}</label>`).join('')}</div>
+    <div class="row"><button class="btn primary" value="save">Spara</button><button class="btn" value="cancel" formnovalidate>Avbryt</button></div>
+  </form>`;
+  dlg.showModal();
+  $('#kidsearch').oninput = (e) => { const q = e.target.value.toLowerCase(); dlg.querySelectorAll('.kidlist label').forEach((l) => { l.hidden = q && !l.dataset.name.includes(q); }); };
+  dlg.onclose = async () => {
+    if (dlg.returnValue !== 'save') return;
+    const children = [...dlg.querySelectorAll('input[name=k]:checked')].map((x) => x.value);
+    try { await B.updateCoach(cid, { children }); await refreshState(); viewPlayers(); toast('Kopplingen är sparad.'); } catch (e) { toast(e.message, true); }
   };
 }
 
@@ -906,6 +938,7 @@ document.addEventListener('click', async (e) => {
       }
       case 'addreserve': reserveDialog(d.key); break;
       case 'coaches': coachDialog(d.key); break;
+      case 'coachkids': kidsDialog(d.id); break;
       case 'print': window.print(); break;
       case 'addcoach': {
         const inp = $('#newcoach'); const name = inp.value.trim();
@@ -952,6 +985,13 @@ document.addEventListener('change', async (e) => {
   const t = e.target, d = t.dataset;
   try {
     if (d.act === 'avail') await setAvail(d.key, d.pid, t.checked);
+    if (d.act === 'cavail') {
+      await B.setCoachAvailability(d.key, d.cid, t.checked);
+      const a = (S.state.coachAvailability ||= {})[d.key] ||= {};
+      if (t.checked) delete a[d.cid]; else a[d.cid] = false;
+      renderRound(true);
+    }
+    if (d.act === 'csquad') { await B.updateCoach(d.id, { squad: t.value }); await refreshState(); viewPlayers(); toast(t.value === 'reserv' ? 'Tränaren är nu reserv.' : 'Tränaren är nu ordinarie.'); }
     if (d.act === 'plevel') { await B.updatePlayer(d.pid, { level: t.value }); await refreshState(); toast('Nivågruppen är ändrad.'); }
     if (d.act === 'psquad') { await B.updatePlayer(d.pid, { squad: t.value }); await refreshState(); t.classList.toggle('isres', t.value === 'reserv'); toast(t.value === 'reserv' ? 'Spelaren är nu reserv.' : 'Spelaren är nu ordinarie.'); viewPlayers(); }
     if (d.act === 'pgoalie') { await B.updatePlayer(d.pid, { canGoalie: t.checked }); await refreshState(); }

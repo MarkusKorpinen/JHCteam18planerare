@@ -76,7 +76,7 @@ export function createSupabaseBackend({ url, anonKey }) {
     createdAt: r.created_at, createdByName: r.created_by_name, updatedAt: r.updated_at, updatedBy: r.updated_by,
     updatedByName: r.updated_by_name, confirmedAt: r.confirmed_at, confirmedBy: r.confirmed_by_name,
   });
-  const roundData = (r) => ({ keys: r.keys, settings: r.settings, teams: r.teams, locks: r.locks, log: r.log, lastSeed: r.lastSeed });
+  const roundData = (r) => ({ keys: r.keys, settings: r.settings, teams: r.teams, locks: r.locks, coachLocks: r.coachLocks || [], log: r.log, lastSeed: r.lastSeed });
 
   return {
     mode: 'supabase',
@@ -111,7 +111,7 @@ export function createSupabaseBackend({ url, anonKey }) {
       return this.me();
     },
     async loadState() {
-      const [settings, players, avail, schedule, changes, rounds, history, coaches] = await Promise.all([
+      const [settings, players, avail, schedule, changes, rounds, history, coaches, cavail] = await Promise.all([
         rest('GET', 'settings?select=data&id=eq.1'),
         rest('GET', 'players?select=*&order=name'),
         rest('GET', 'availability?select=uppdrag_key,player_id'),
@@ -119,12 +119,16 @@ export function createSupabaseBackend({ url, anonKey }) {
         rest('GET', 'schedule_changes?select=*&order=at.desc&limit=300'),
         rest('GET', 'rounds?select=id,name,status,version,created_at,updated_at,updated_by_name,confirmed_at,keys:data->keys&order=created_at.desc'),
         rest('GET', 'history?select=*&order=confirmed_at'),
-        rest('GET', 'coaches?select=id,name,active&order=name'),
+        rest('GET', 'coaches?select=id,name,active,squad,children&order=name'),
+        rest('GET', 'coach_availability?select=uppdrag_key,coach_id'),
       ]);
+      const coachAvailability = {};
+      for (const a of cavail) (coachAvailability[a.uppdrag_key] ||= {})[a.coach_id] = false;
       const availability = {};
       for (const a of avail) (availability[a.uppdrag_key] ||= {})[a.player_id] = false;
       return {
-        settings: settings[0]?.data, players: players.map(mapPlayer), availability, coaches,
+        settings: settings[0]?.data, players: players.map(mapPlayer), availability, coachAvailability,
+        coaches: coaches.map((c) => ({ id: c.id, name: c.name, active: c.active, squad: c.squad || 'ordinarie', children: c.children || [] })),
         schedule: schedule[0] || { uppdrag: {} }, changes,
         rounds: rounds.map((r) => ({ id: r.id, name: r.name, status: r.status, keys: r.keys || [], createdAt: r.created_at, updatedAt: r.updated_at, updatedByName: r.updated_by_name, confirmedAt: r.confirmed_at })),
         history: history.map((h) => ({ roundId: h.round_id, roundName: h.round_name, confirmedAt: h.confirmed_at, teams: h.data.teams || [] })),
@@ -150,6 +154,10 @@ export function createSupabaseBackend({ url, anonKey }) {
     },
     async addCoach(name) { const [row] = await rest('POST', 'coaches', { name }, 'return=representation'); return row; },
     updateCoach: (id, patch) => rest('PATCH', `coaches?id=eq.${id}`, patch),
+    async setCoachAvailability(key, cid, available) {
+      if (available) await rest('DELETE', `coach_availability?uppdrag_key=eq.${encodeURIComponent(key)}&coach_id=eq.${cid}`);
+      else await rest('POST', 'coach_availability', { uppdrag_key: key, coach_id: cid }, 'resolution=ignore-duplicates');
+    },
     async setAvailability(key, pid, available) {
       if (available) await rest('DELETE', `availability?uppdrag_key=eq.${encodeURIComponent(key)}&player_id=eq.${pid}`);
       else await rest('POST', 'availability', { uppdrag_key: key, player_id: pid }, 'resolution=ignore-duplicates');
@@ -207,7 +215,7 @@ export function createSupabaseBackend({ url, anonKey }) {
     setMyName: (name) => rpc('set_my_name', { p_name: name }),
     saveSettings: (data, rename) => rpc('save_settings', { p_data: data, p_rename: rename || {} }),
     async exportAll() {
-      const tables = ['settings', 'players', 'coaches', 'availability', 'schedule', 'schedule_changes', 'rounds', 'history', 'comments', 'leaders'];
+      const tables = ['settings', 'players', 'coaches', 'coach_availability', 'availability', 'schedule', 'schedule_changes', 'rounds', 'history', 'comments', 'leaders'];
       const out = { exportedAt: new Date().toISOString() };
       for (const t of tables) out[t] = await rest('GET', `${t}?select=*`);
       return out;

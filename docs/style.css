@@ -171,3 +171,10 @@ html:has(body.printmode), body.printmode { background: #fff; }
   .sheet:last-child { break-after: auto; page-break-after: auto; }
 }
 a.btn { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
+.lk { font-size: .62rem; font-weight: 800; background: #e3f0e8; color: #1d6b3d; border-radius: 4px; padding: 1px 4px; margin-left: 5px; }
+.coach.bad { border-color: var(--bad); background: #fdecee; }
+.coach .res, .coach .lock { margin-left: 5px; }
+th.subhead { background: #f4f6f9; font-size: .8rem; text-transform: uppercase; color: var(--muted); }
+.kidlist { max-height: 50vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.users select { padding: 4px 6px; margin: 0 6px; }
+.kidlist label[hidden] { display: none; }

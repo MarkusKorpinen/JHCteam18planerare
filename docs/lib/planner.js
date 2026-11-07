@@ -7,6 +7,8 @@
 
 export const RULES = [
   'Bara aktiva spelare som inte är markerade ”kan inte” för poolspelet tas ut.',
+  'Varje lag ska ha minst en ledare. Ordinarie ledare följer med sitt barn, så förslaget sprider ledarbarnen över lagen. Spelar två lag på samma plats samma dag räcker det att platsen har lika många ledare som lag; ledarbarnen kan då spela i samma lag och en ledare leder det andra laget.',
+  'Räcker inte ledarbarnen fördelas ordinarie ledare utan barn i spel (den som varit med minst går först). Reservledare läggs till manuellt med ”Välj tränare”.',
   'Förslaget använder bara ordinarie spelare. Reserver läggs till manuellt av ledarna (knappen ”Lägg till reserv” på lagkortet). Låsta reserver ligger kvar vid nytt förslag.',
   'En spelare tas aldrig ut i två poolspel samma dag (tidskrock). Spelare kan inte heller tas ut fler gånger i omgången än inställningen ”Max poolspel per spelare”.',
   'Låsta placeringar läggs in först och flyttas aldrig av ett nytt förslag.',
@@ -80,11 +82,23 @@ export function propose(o) {
   const rand = rng(o.seed ?? 1);
   const levels = o.levels || [];
   const rank = (p) => { const i = levels.indexOf(p.level); return i < 0 ? levels.length : i; };
+  const preRand = new Map();
+  const tieRandPre = (id) => { if (!preRand.has(id)) preRand.set(id, rand()); return preRand.get(id); };
   const stats = historyStats(o.history);
   const players = (o.players || []).filter((p) => p.active !== false);
   const byId = new Map(players.map((p) => [p.id, p]));
   const pool = players.filter((p) => !isReserve(p)); // bara ordinarie föreslås
-  const U = o.uppdrag.map((u) => ({ key: u.key, date: u.date, goalies: [], skaters: [] }));
+  const U = o.uppdrag.map((u) => ({ key: u.key, date: u.date, site: `${u.date}|${u.venue || u.key}`, goalies: [], skaters: [] }));
+  // Ledare/tränare
+  const coaches = (o.coaches || []).filter((c) => c.active !== false);
+  const coachById = new Map(coaches.map((c) => [c.id, c]));
+  const coachOk = (key, cid) => coachById.has(cid) && !(o.coachAvailability?.[key]?.[cid] === false);
+  const ordCoaches = coaches.filter((c) => !isReserve(c));
+  const parentsOf = new Map();
+  for (const c of ordCoaches) for (const pid of c.children || []) { if (!parentsOf.has(pid)) parentsOf.set(pid, []); parentsOf.get(pid).push(c.id); }
+  const sites = new Map();
+  for (const u of U) { if (!sites.has(u.site)) sites.set(u.site, []); sites.get(u.site).push(u); }
+  const coachLocks = (o.coachLocks || []).filter((l) => coachById.has(l.cid));
   const uByKey = new Map(U.map((u) => [u.key, u]));
   const usedDates = new Map(); // pid -> Set(date)
   const usedCount = new Map();
@@ -127,6 +141,43 @@ export function propose(o) {
       (stats.goalieApps.get(a.p.id) || 0) - (stats.goalieApps.get(b.p.id) || 0) ||
       a.r - b.r);
     place(c[0].p.id, u, 'G');
+  }
+
+  // 3a. Ledarbarn: se till att varje plats får minst lika många ledare som lag
+  if (parentsOf.size) {
+    const dateLeaders = () => { // datum -> Map(coach -> site) för ledare som redan "kommer med"
+      const m = new Map();
+      for (const l of coachLocks) { const u = uByKey.get(l.key); if (!u) continue; if (!m.has(u.date)) m.set(u.date, new Map()); m.get(u.date).set(l.cid, u.site); }
+      for (const u of U) for (const pid of [...u.goalies, ...u.skaters]) for (const cid of parentsOf.get(pid) || []) {
+        if (!coachOk(u.key, cid)) continue;
+        if (!m.has(u.date)) m.set(u.date, new Map());
+        if (!m.get(u.date).has(cid)) m.get(u.date).set(cid, u.site);
+      }
+      return m;
+    };
+    const leadersAt = (site, dl) => { const d = sites.get(site)[0].date; let n = 0; for (const [, st] of dl.get(d) || []) if (st === site) n++; return n; };
+    const done = new Set();
+    for (let guard = 0; guard < 200; guard++) {
+      const dl = dateLeaders();
+      const needy = [...sites.keys()].filter((st) => !done.has(st) && leadersAt(st, dl) < sites.get(st).length);
+      if (!needy.length) break;
+      const candsFor = (st) => {
+        const us = sites.get(st), date = us[0].date, taken = dl.get(date) || new Map();
+        return pool.filter((p) => parentsOf.has(p.id) && us.some((u) => u.skaters.length < s.skaters && eligible(p.id, u))
+          && parentsOf.get(p.id).some((cid) => !taken.has(cid) && us.some((u) => coachOk(u.key, cid))));
+      };
+      needy.sort((a, b) => candsFor(a).length - candsFor(b).length);
+      const st = needy[0];
+      const cands = candsFor(st);
+      if (!cands.length) { done.add(st); continue; }
+      cands.sort((a, b) => (stats.apps.get(a.id) || 0) - (stats.apps.get(b.id) || 0) || tieRandPre(a.id) - tieRandPre(b.id));
+      const p = cands[0];
+      const us = sites.get(st).filter((u) => u.skaters.length < s.skaters && eligible(p.id, u));
+      const leaderKids = (u) => [...u.goalies, ...u.skaters].filter((id) => parentsOf.has(id)).length;
+      us.sort((a, b) => leaderKids(a) - leaderKids(b) || a.skaters.length - b.skaters.length);
+      place(p.id, us[0], 'S');
+      locked.add(`${p.id}@${us[0].key}`);
+    }
   }
 
   // 3. Utespelare
@@ -203,7 +254,36 @@ export function propose(o) {
   // 5. Kedjor
   const teams = {};
   for (const u of U) {
-    teams[u.key] = { goalies: u.goalies, lines: buildLines(u.skaters, s.lineSize, byId, rank, stats, rand) };
+    teams[u.key] = { goalies: u.goalies, lines: buildLines(u.skaters, s.lineSize, byId, rank, stats, rand), coaches: [] };
+  }
+
+  // 6. Ledare: låsta först, sedan föräldrar till uttagna barn, jämna ut inom platsen, fyll med ordinarie utan barn i spel
+  const coachDate = new Map(); // datum -> Set(coach)
+  const useCoach = (u, cid) => { teams[u.key].coaches.push(cid); if (!coachDate.has(u.date)) coachDate.set(u.date, new Set()); coachDate.get(u.date).add(cid); };
+  const busy = (u, cid) => coachDate.get(u.date)?.has(cid);
+  const lockedC = new Set();
+  for (const l of coachLocks) { const u = uByKey.get(l.key); if (u && !busy(u, l.cid)) { useCoach(u, l.cid); lockedC.add(`${l.cid}@${u.key}`); } }
+  for (const u of U) for (const pid of [...u.goalies, ...u.skaters]) for (const cid of parentsOf.get(pid) || [])
+    if (coachOk(u.key, cid) && !busy(u, cid)) useCoach(u, cid);
+  for (const [, us] of sites) {
+    for (let guard = 0; guard < 20; guard++) {
+      const empty = us.find((u) => !teams[u.key].coaches.length);
+      if (!empty) break;
+      const movable = (u) => teams[u.key].coaches.filter((cid) => !lockedC.has(`${cid}@${u.key}`) && coachOk(empty.key, cid));
+      const donor = us.find((u) => teams[u.key].coaches.length > 1 && movable(u).length);
+      if (!donor) break;
+      const cid = teams[donor.key].coaches.find((c) => !lockedC.has(`${c}@${donor.key}`) && coachOk(empty.key, c));
+      teams[donor.key].coaches = teams[donor.key].coaches.filter((c) => c !== cid);
+      teams[empty.key].coaches.push(cid);
+    }
+  }
+  const coachApps = new Map();
+  for (const h of o.history || []) for (const t of h.teams || []) for (const cid of t.coaches || []) coachApps.set(cid, (coachApps.get(cid) || 0) + 1);
+  for (const u of U) {
+    if (teams[u.key].coaches.length) continue;
+    const free = ordCoaches.filter((c) => coachOk(u.key, c.id) && !busy(u, c.id))
+      .sort((a, b) => (coachApps.get(a.id) || 0) - (coachApps.get(b.id) || 0) || tieRandPre(a.id) - tieRandPre(b.id));
+    if (free.length) useCoach(u, free[0].id);
   }
   const unplaced = players
     .filter((p) => !usedCount.get(p.id) && o.uppdrag.some((u) => isAvailable(o.availability, u.key, p.id)))
@@ -235,7 +315,7 @@ export function buildLines(skaters, lineSize, byId, rank, stats, rand) {
 }
 
 // ---------- kontroller ----------
-export function validate({ round, uppdragMap, players, availability, levels, coaches = [] }) {
+export function validate({ round, uppdragMap, players, availability, levels, coaches = [], coachAvailability = {} }) {
   const s = { ...DEFAULT_ROUND_SETTINGS, ...(round.settings || {}) };
   const byId = new Map(players.map((p) => [p.id, p]));
   const name = (id) => byId.get(id)?.name || 'Okänd spelare';
@@ -264,7 +344,8 @@ export function validate({ round, uppdragMap, players, availability, levels, coa
       placements.get(pid).push({ key, date: u?.date });
     }
     for (const r of t.review || []) if (!r.ack) w.push({ level: 'review', text: `Schemat har ändrats: ${r.items.join('; ')}` });
-    if (!(t.coaches || []).length) w.push({ level: 'info', text: 'Ingen tränare vald.' });
+    if (!(t.coaches || []).length) w.push({ level: 'error', text: 'Ledare saknas. Välj en tränare (eventuellt en reserv).' });
+    for (const cid of t.coaches || []) if (coachAvailability?.[key]?.[cid] === false) w.push({ level: 'error', text: `Tränaren ${coaches.find((c) => c.id === cid)?.name || ''} kan inte detta poolspel.` });
     perTeam[key] = w;
   }
   for (const [pid, list] of placements) {
