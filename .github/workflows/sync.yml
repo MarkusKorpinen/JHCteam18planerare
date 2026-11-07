@@ -1,0 +1,21 @@
+   name: Synka matchschema
+
+   on:
+     schedule:
+       - cron: '41 5 * * *'   # varje dag ca 06:41 svensk vintertid (efter matchsidans morgonkörning)
+     workflow_dispatch: {}
+
+   permissions:
+     contents: read
+
+   jobs:
+     sync:
+       runs-on: ubuntu-latest
+       timeout-minutes: 5
+       steps:
+         - uses: actions/checkout@v7
+         - name: Hämta schemat och spara i Supabase
+           run: node scripts/sync.mjs
+           env:
+             SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+             SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
