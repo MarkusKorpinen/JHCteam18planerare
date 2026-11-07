@@ -293,3 +293,9 @@ dialog form p { margin: 0; }
 #ask p { margin: 0; }
 .brand { white-space: nowrap; }
 @media (max-width: 520px) { .brand { font-size: .92rem; } .brandlogo { width: 24px; height: 24px; } }
+/* Egna poolspel */
+[hidden] { display: none !important; }
+fieldset { min-width: 0; }
+.cematches td { padding: 3px 4px; }
+.cematches input, .cematches select { min-width: 0; width: 100%; }
+.cematches td:nth-child(1) { min-width: 92px; } .cematches td:nth-child(2), .cematches td:nth-child(3) { min-width: 130px; } .cematches td:nth-child(4) { min-width: 60px; }

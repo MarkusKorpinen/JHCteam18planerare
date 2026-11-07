@@ -15,6 +15,7 @@ export const RULES = [
   'Målvakter väljs bara bland spelare som kan stå i mål. Den som stått i mål minst antal gånger i fastställda lag går först.',
   'Utespelare fördelas så att varje nivågrupp blir så jämnt spridd som möjligt mellan lagen. Spelare med minst antal möjliga poolspel placeras först. Vid lika går den som spelat minst antal poolspel hittills före.',
   'Efter fördelningen provas byten mellan lagen så länge nivåfördelningen blir jämnare.',
+  'Därefter byts spelare i samma nivågrupp mellan lagen så länge det minskar hur många gånger spelarna redan har spelat i samma lag. Nivåbalansen påverkas inte och ledarbarn ligger kvar.',
   'Inom varje lag sorteras utespelarna efter nivå och delas i kedjor, så att spelare på liknande nivå spelar ihop.',
   'Bland likvärdiga kedjeindelningar väljs den där spelarna har spelat minst tillsammans i tidigare fastställda lag.',
   'Saknas spelare, till exempel en målvakt, lämnas platsen tom och lagkortet visar en varning.',
@@ -54,8 +55,9 @@ export function historyStats(history) {
       for (const line of t.lines || [])
         for (let i = 0; i < line.length; i++)
           for (let j = i + 1; j < line.length; j++) inc(pairs, pairKey(line[i], line[j]));
-      for (let i = 0; i < all.length; i++)
-        for (let j = i + 1; j < all.length; j++) inc(teamPairs, pairKey(all[i], all[j]));
+      const team = [...(t.goalies || []), ...all];
+      for (let i = 0; i < team.length; i++)
+        for (let j = i + 1; j < team.length; j++) inc(teamPairs, pairKey(team[i], team[j]));
     }
   }
   return { pairs, teamPairs, apps, goalieApps, pairCount: (a, b) => pairs.get(pairKey(a, b)) || 0, teamPairCount: (a, b) => teamPairs.get(pairKey(a, b)) || 0 };
@@ -251,6 +253,36 @@ export function propose(o) {
     }
   }
 
+  // 4b. Rotation: byt spelare i samma nivågrupp mellan lagen när det minskar antalet par som redan spelat ihop
+  const teamCost = (u, swapOut, swapIn) => {
+    const ids = [...u.goalies, ...u.skaters].map((id) => (id === swapOut ? swapIn : id));
+    let c = 0;
+    for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) { const n = stats.teamPairCount(ids[i], ids[j]); c += n * n; }
+    return c;
+  };
+  for (let guard = 0, improved = true; improved && guard < 300; guard++) {
+    improved = false;
+    let best = null;
+    for (let ai = 0; ai < U.length; ai++) for (let bi = ai + 1; bi < U.length; bi++) {
+      const a = U[ai], b = U[bi];
+      const base = teamCost(a) + teamCost(b);
+      if (!base) continue;
+      for (const pa of a.skaters) for (const pb of b.skaters) {
+        if (locked.has(`${pa}@${a.key}`) || locked.has(`${pb}@${b.key}`)) continue;
+        if (byId.get(pa).level !== byId.get(pb).level) continue;
+        if (!canSwapInto(pa, a, b) || !canSwapInto(pb, b, a)) continue;
+        const gain = base - (teamCost(a, pa, pb) + teamCost(b, pb, pa));
+        if (gain > 0 && (!best || gain > best.gain)) best = { a, b, pa, pb, gain };
+      }
+    }
+    if (best) {
+      const { a, b, pa, pb } = best;
+      a.skaters[a.skaters.indexOf(pa)] = pb; b.skaters[b.skaters.indexOf(pb)] = pa;
+      moveDate(pa, a, b); moveDate(pb, b, a);
+      improved = true;
+    }
+  }
+
   // 5. Kedjor
   const teams = {};
   for (const u of U) {
@@ -315,7 +347,9 @@ export function buildLines(skaters, lineSize, byId, rank, stats, rand) {
 }
 
 // ---------- kontroller ----------
-export function validate({ round, uppdragMap, players, availability, levels, coaches = [], coachAvailability = {} }) {
+export const OFTEN_TOGETHER = 3; // varna när två spelare redan spelat i samma lag så här många gånger
+export function validate({ round, uppdragMap, players, availability, levels, coaches = [], coachAvailability = {}, history = [] }) {
+  const hs = historyStats((history || []).filter((h) => h.roundId !== round.id));
   const s = { ...DEFAULT_ROUND_SETTINGS, ...(round.settings || {}) };
   const byId = new Map(players.map((p) => [p.id, p]));
   const name = (id) => byId.get(id)?.name || 'Okänd spelare';
@@ -344,6 +378,13 @@ export function validate({ round, uppdragMap, players, availability, levels, coa
       placements.get(pid).push({ key, date: u?.date });
     }
     for (const r of t.review || []) if (!r.ack) w.push({ level: 'review', text: `Schemat har ändrats: ${r.items.join('; ')}` });
+    const ids = [...(t.goalies || []), ...skaters];
+    const often = [];
+    for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
+      const n = hs.teamPairCount(ids[i], ids[j]);
+      if (n >= OFTEN_TOGETHER) often.push({ n, text: `${name(ids[i])} och ${name(ids[j])} har spelat i samma lag ${n} gånger.` });
+    }
+    often.sort((x, y) => y.n - x.n).slice(0, 3).forEach((o) => w.push({ level: 'info', text: o.text }));
     if (!(t.coaches || []).length) w.push({ level: 'error', text: 'Ledare saknas. Välj en tränare (eventuellt en reserv).' });
     for (const cid of t.coaches || []) if (coachAvailability?.[key]?.[cid] === false) w.push({ level: 'error', text: `Tränaren ${coaches.find((c) => c.id === cid)?.name || ''} kan inte detta poolspel.` });
     perTeam[key] = w;

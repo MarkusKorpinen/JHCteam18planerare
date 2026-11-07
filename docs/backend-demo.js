@@ -56,7 +56,7 @@ export function createDemoBackend({ source = 'demo/schedule.json' } = {}) {
       availability: [], schedule: { uppdrag: {} }, changes: [], rounds: [], history: [], comments: [],
       demoRole: 'admin', clubs: {}, invitations: {},
       teamColors: Object.fromEntries(Object.entries(SEED_COLORS).map(([t, [home, away]]) => [t, { home, away, source: 'swehockey' }])),
-      homeEvents: [], routineCategories: [], routines: [],
+      homeEvents: [], routineCategories: [], routines: [], customEvents: [],
     };
     try { db.homeEvents = await (await fetch('demo/home_events.json')).json(); } catch {}
     const cat = { id: uuid(), name: 'Föräldrar', sort: 1 };
@@ -104,7 +104,7 @@ export function createDemoBackend({ source = 'demo/schedule.json' } = {}) {
       const plan = me.planner;
       return {
         teamColors: clone(db.teamColors || {}), clubs: clone(db.clubs || {}), homeEvents: clone(db.homeEvents || []),
-        invitations: clone(db.invitations || {}), routineCategories: clone(db.routineCategories || []),
+        customEvents: clone(db.customEvents || []), invitations: clone(db.invitations || {}), routineCategories: clone(db.routineCategories || []),
         routines: clone((db.routines || []).filter((r) => !r.deletedAt || ((me.teamlead || me.planner) && Date.now() - Date.parse(r.deletedAt) < 30 * 864e5))).map((r) => { delete r.content; return r; }),
         settings: clone(db.settings), players: clone(db.players).map((p) => (plan ? p : { ...p, level: null })), coaches: clone(db.coaches || []), coachAvailability: plan ? clone(db.coachAvailability || {}) : {}, availability: plan ? availMap() : {}, schedule: clone(db.schedule),
         changes: clone(db.changes),
@@ -173,6 +173,15 @@ export function createDemoBackend({ source = 'demo/schedule.json' } = {}) {
     async deleteCategory(id) { db.routineCategories = db.routineCategories.filter((c) => c.id !== id); for (const r of db.routines) if (r.categoryId === id) r.categoryId = null; save(); },
     async saveTeamColor(team, home, away) { db.teamColors[team] = { home, away, source: 'manual' }; save(); },
     async saveClubLogo(name, logo) { db.clubs[name] = { logo }; save(); },
+    async saveCustomEvent(ev) {
+      const me = meNow();
+      if (!me.teamlead && !me.planner) throw new Error('Bara lagledare och lagplanerare kan ändra egna poolspel.');
+      db.customEvents ||= [];
+      const x = { ...(ev.id ? db.customEvents.find((e) => e.id === ev.id) : { id: uuid() }), date: ev.date, venue: ev.venue, title: ev.title || null, data: ev.data, updatedAt: now(), updatedByName: ME.name };
+      db.customEvents = [...db.customEvents.filter((e) => e.id !== x.id), x]; save();
+      return x.id;
+    },
+    async deleteCustomEvent(id) { db.customEvents = (db.customEvents || []).filter((e) => e.id !== id); save(); },
     async saveInvitation(key, data) { db.invitations[key] = { ...data, updatedAt: now(), updatedByName: ME.name }; save(); },
     async createInvite(email) { return { email, expires: new Date(Date.now() + 7 * 864e5).toISOString(), link: `${location.origin}${location.pathname}#/inbjudan/DEMO-KOD/${encodeURIComponent(email)}` }; },
     async deleteInvite() {}, async setRole() {}, async removeLeader() {}, async setMyName() {},

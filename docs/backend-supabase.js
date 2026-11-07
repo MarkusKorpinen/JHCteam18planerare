@@ -112,7 +112,7 @@ export function createSupabaseBackend({ url, anonKey }) {
       return this.me();
     },
     async loadState() {
-      const [settings, players, avail, schedule, changes, rounds, history, coaches, cavail, levels, teamColors, clubs, homeEvents, invitations, routines, categories] = await Promise.all([
+      const [settings, players, avail, schedule, changes, rounds, history, coaches, cavail, levels, teamColors, clubs, homeEvents, invitations, routines, categories, customEvents] = await Promise.all([
         rest('GET', 'settings?select=data&id=eq.1'),
         rest('GET', 'players?select=*&order=name'),
         rest('GET', 'availability?select=uppdrag_key,player_id'),
@@ -129,6 +129,7 @@ export function createSupabaseBackend({ url, anonKey }) {
         rest('GET', 'invitations?select=*'),
         rest('GET', 'routines?select=id,title,category_id,status,version,created_by,created_by_name,updated_at,updated_by_name,published_at,deleted_at,deleted_by_name&order=title'),
         rest('GET', 'routine_categories?select=*&order=sort,name'),
+        rest('GET', 'custom_events?select=*&order=date').catch(() => []),
       ]);
       const levelOf = new Map(levels.map((l) => [l.player_id, l.level]));
       const coachAvailability = {};
@@ -143,6 +144,7 @@ export function createSupabaseBackend({ url, anonKey }) {
         invitations: Object.fromEntries(invitations.map((i) => [i.event_key, { ...i.data, updatedAt: i.updated_at, updatedByName: i.updated_by_name }])),
         routines: routines.map((r) => ({ id: r.id, title: r.title, categoryId: r.category_id, status: r.status, version: r.version, createdBy: r.created_by, createdByName: r.created_by_name, updatedAt: r.updated_at, updatedByName: r.updated_by_name, publishedAt: r.published_at, deletedAt: r.deleted_at, deletedByName: r.deleted_by_name })),
         routineCategories: categories,
+        customEvents: customEvents.map((e) => ({ id: e.id, date: e.date, venue: e.venue, title: e.title, data: e.data || {}, updatedAt: e.updated_at, updatedByName: e.updated_by_name })),
         coaches: coaches.map((c) => ({ id: c.id, name: c.name, active: c.active, squad: c.squad || 'ordinarie', children: c.children || [] })),
         schedule: schedule[0] || { uppdrag: {} }, changes,
         rounds: rounds.map((r) => ({ id: r.id, name: r.name, status: r.status, keys: r.keys || [], createdAt: r.created_at, updatedAt: r.updated_at, updatedByName: r.updated_by_name, confirmedAt: r.confirmed_at })),
@@ -237,6 +239,15 @@ export function createSupabaseBackend({ url, anonKey }) {
     updateCategory: (id, patch) => rest('PATCH', `routine_categories?id=eq.${id}`, patch),
     deleteCategory: (id) => rest('DELETE', `routine_categories?id=eq.${id}`),
 
+    // egna poolspel
+    async saveCustomEvent(ev) {
+      const body = { date: ev.date, venue: ev.venue, title: ev.title || null, data: ev.data };
+      const rows = ev.id ? await rest('PATCH', `custom_events?id=eq.${ev.id}`, body, 'return=representation') : await rest('POST', 'custom_events', body, 'return=representation');
+      if (!rows?.length) throw new AppError('Poolspelet kunde inte sparas. Bara lagledare och lagplanerare kan ändra egna poolspel.');
+      return rows[0].id;
+    },
+    deleteCustomEvent: (id) => rest('DELETE', `custom_events?id=eq.${id}`),
+
     // matchinbjudan
     saveTeamColor: (team, home, away) => rest('POST', 'team_colors?on_conflict=team', { team, home, away, source: 'manual', updated_at: new Date().toISOString() }, 'resolution=merge-duplicates'),
     saveClubLogo: (name, logo) => rest('POST', 'clubs?on_conflict=name', { name, logo, updated_at: new Date().toISOString() }, 'resolution=merge-duplicates'),
@@ -265,7 +276,7 @@ export function createSupabaseBackend({ url, anonKey }) {
     setMyName: (name) => rpc('set_my_name', { p_name: name }),
     saveSettings: (data, rename) => rpc('save_settings', { p_data: data, p_rename: rename || {} }),
     async exportAll() {
-      const tables = ['settings', 'players', 'player_levels', 'coaches', 'coach_availability', 'availability', 'schedule', 'schedule_changes', 'rounds', 'history', 'comments', 'routine_categories', 'routines', 'routine_versions', 'team_colors', 'clubs', 'home_events', 'invitations', 'leaders'];
+      const tables = ['settings', 'players', 'player_levels', 'coaches', 'coach_availability', 'availability', 'schedule', 'schedule_changes', 'rounds', 'history', 'comments', 'routine_categories', 'routines', 'routine_versions', 'team_colors', 'clubs', 'home_events', 'custom_events', 'invitations', 'leaders'];
       const out = { exportedAt: new Date().toISOString() };
       for (const t of tables) out[t] = await rest('GET', `${t}?select=*`);
       return out;

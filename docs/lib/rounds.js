@@ -158,7 +158,7 @@ export function pendingReview(r, key, changes) {
 
 export function view(r, ctx) {
   const withReview = { ...r, teams: Object.fromEntries(r.keys.map((k) => [k, { ...(r.teams[k] || emptyTeam()), review: pendingReview(r, k, ctx.changes).map((c) => ({ at: c.at, items: c.items, ack: false })) }])) };
-  const validation = validate({ round: withReview, uppdragMap: ctx.uppdrag, players: ctx.players, availability: ctx.availability, levels: ctx.levels, coaches: ctx.coaches || [], coachAvailability: ctx.coachAvailability || {} });
+  const validation = validate({ round: withReview, uppdragMap: ctx.uppdrag, players: ctx.players, availability: ctx.availability, levels: ctx.levels, coaches: ctx.coaches || [], coachAvailability: ctx.coachAvailability || {}, history: ctx.history || [] });
   const copy = {};
   for (const k of r.keys) copy[k] = rosterText(teamName(ctx, k), r.teams[k], ctx.players);
   copy.all = r.keys.map((k) => copy[k]).join('\n\n\n');

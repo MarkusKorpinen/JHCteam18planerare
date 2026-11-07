@@ -8,6 +8,7 @@ import { runSync } from './lib/schedule.js';
 import { ACTIONS, ALLOWED_WHEN_CONFIRMED, newRound, addLog, snapshot, view, pendingReview } from './lib/rounds.js';
 import { ARENAS, DEFAULT_TEXTS, arenaFor, buildMatches, assignJerseys, resolveColors, clubOf, isOurs, colorLabel, colorHex, rinkSvg } from './lib/invite.js';
 import { DEMO_ROLES } from './backend-demo.js';
+import { mergeCustom, customKey, addMinutes, OUR_COLORS } from './lib/custom.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const app = $('#app');
@@ -128,13 +129,15 @@ async function route() {
     const m = h.match(/^\/omgang\/([\w-]+)/);
     const rt = h.match(/^\/rutin\/([\w-]+)(?:\/(redigera|utskrift))?$/);
     const mi = h.match(/^\/matchinbjudan\/(.+?)(\/utskrift)?$/);
-    let tab = m ? 'omgangar' : rt ? 'rutiner' : mi ? 'schema' : (h.slice(1) || 'omgangar');
+    const ce = h.match(/^\/eget\/([\w-]+)$/);
+    let tab = m ? 'omgangar' : rt ? 'rutiner' : mi || ce ? 'schema' : (h.slice(1) || 'omgangar');
     if (!planner && (tab === 'spelare' || tab === 'historik')) tab = 'omgangar';
     document.querySelectorAll('#tabs a').forEach((a) => a.classList.toggle('on', a.dataset.tab === tab));
     window.scrollTo(0, 0);
     if (m) return await viewRound(m[1]);
     if (rt) return await (rt[1] === 'ny' ? editRoutine(null) : rt[2] === 'redigera' ? editRoutine(rt[1]) : rt[2] === 'utskrift' ? printRoutine(rt[1]) : viewRoutine(rt[1]));
     if (mi) return await viewInvitation(decodeURIComponent(mi[1]), !!mi[2]);
+    if (ce) return editCustomEvent(ce[1] === 'ny' ? null : ce[1]);
     await ({ omgangar: viewRounds, spelare: viewPlayers, schema: viewSchedule, historik: viewHistory, ledare: viewLeaders, rutiner: viewRoutines }[tab] || viewRounds)();
   } catch (e) {
     if (e.status === 401) { S.me = null; return viewLogin(e.message); }
@@ -142,7 +145,8 @@ async function route() {
   }
 }
 async function refreshState() {
-  S.state = await B.loadState();
+  const st = await B.loadState();
+  S.state = mergeCustom(st, st.customEvents || []);
   S.state.today = stockholmToday();
 }
 async function maybeAutoSync() {
@@ -706,12 +710,19 @@ function viewSchedule() {
     <p class="small muted">Källa: den offentliga matchöversikten (JHCmatcher), som i sin tur läser stats.swehockey.se.</p>
   </section>
   <section class="panel">
+    <div class="row"><h2 style="flex:1;margin:0">Egna poolspel och matcher</h2>${S.me.planner || S.me.teamlead ? '<a class="btn primary" href="#/eget/ny">+ Nytt eget poolspel</a>' : ''}</div>
+    <p class="small muted">Poolspel och matcher som inte finns på swehockey. De går att planera lag till och göra matchinbjudan för, precis som de hämtade.</p>
+    ${(S.state.customEvents || []).filter((e) => e.date >= S.state.today).map((e) => `<div class="sched"><strong>${esc(fDate(e.date))}</strong> · ${esc(e.venue)}${e.title ? ` · ${esc(e.title)}` : ''}
+      <div class="small">${esc((e.data.ourTeams || []).join(', '))} · ${(e.data.matches || []).length} matcher</div>
+      <div class="row">${S.me.planner || S.me.teamlead ? `<a class="linkbtn" href="#/eget/${e.id}">ändra</a>` : ''}<a class="linkbtn" href="#/matchinbjudan/${encodeURIComponent(customKey(e))}">matchinbjudan</a></div></div>`).join('') || '<p class="small muted">Inga egna poolspel inlagda.</p>'}
+  </section>
+  <section class="panel">
     <h2>Hemmapoolspel – matchinbjudan</h2>
     ${(() => {
       const evs = (S.state.homeEvents || []).filter((e) => e.date >= S.state.today);
-      if (!evs.length) return '<p class="small muted">Inga kommande hemmapoolspel hämtade ännu. Hela spelschemat för hemmapoolspel hämtas av den dagliga synken i GitHub.</p>';
+      if (!evs.length) return '<p class="small muted">Inga kommande hemmapoolspel. Hela spelschemat för hemmapoolspel hämtas av den dagliga synken i GitHub, och egna poolspel läggs in ovan.</p>';
       return `<ul class="rounds">${evs.map((e) => `<li><a href="#/matchinbjudan/${encodeURIComponent(e.key)}">
-        <span class="rname">${esc(fDate(e.date))} · ${esc(e.venue)}</span>
+        <span class="rname">${esc(fDate(e.date))} · ${esc(e.venue)}</span>${e.custom ? ' <span class="badge">Eget</span>' : ''}
         ${S.state.invitations?.[e.key] ? '<span class="badge ok">Inbjudan klar</span>' : '<span class="badge draft">Ej granskad</span>'}
         <span class="small muted block">${[...new Set(e.data.blocks.flatMap((b) => b.matches.flatMap((m) => [m.home, m.away])))].length} lag · ${e.data.blocks.reduce((n, b) => n + b.matches.length, 0)} matcher</span>
       </a></li>`).join('')}</ul>`;
@@ -1245,11 +1256,110 @@ document.addEventListener('pointerup', async (e) => {
   await act('move', { pid, fromKey, toKey, role, line: line === undefined || line === 'new' ? null : Number(line) });
 });
 
+// ---------- egna poolspel ----------
+function editCustomEvent(id) {
+  if (!(S.me.planner || S.me.teamlead)) { app.innerHTML = '<div class="alert warn">Bara lagledare och lagplanerare kan lägga in egna poolspel.</div>'; return; }
+  const ev = id ? (S.state.customEvents || []).find((e) => e.id === id) : null;
+  if (id && !ev) { app.innerHTML = '<div class="alert warn">Poolspelet finns inte.</div>'; return; }
+  const prefix = S.state.settings.teamPrefix || 'Järfälla HC';
+  const known = ['Järfälla Ishall', 'Kallhälls Ishall'];
+  S.ce = {
+    id: ev?.id || null, date: ev?.date || S.state.today, title: ev?.title || '',
+    venue: ev?.venue || 'Järfälla Ishall', ourTeams: [...(ev?.data.ourTeams || [])],
+    opponents: [...(ev?.data.opponents || [])], matches: (ev?.data.matches || []).map((m) => ({ ...m })),
+    start: ev?.data.start || '10:00', length: ev?.data.length || 20,
+  };
+  const allTeams = () => [...S.ce.ourTeams, ...S.ce.opponents.filter(Boolean)];
+  const render = () => {
+    const c = S.ce, teams = allTeams();
+    const teamOpts = (sel) => `<option value="">Välj lag</option>${teams.map((t) => `<option ${t === sel ? 'selected' : ''}>${esc(t)}</option>`).join('')}`;
+    app.innerHTML = `
+    <a href="#/schema" class="back">← Schema</a>
+    <section class="panel">
+      <h2>${c.id ? 'Ändra eget poolspel' : 'Nytt eget poolspel'}</h2>
+      <form id="ceform" class="stack">
+        <div class="grid4">
+          <label>Datum<input type="date" name="date" value="${esc(c.date)}" required></label>
+          <label>Ishall<select name="venueSel">${known.map((v) => `<option ${c.venue === v ? 'selected' : ''}>${v}</option>`).join('')}<option value="__other" ${known.includes(c.venue) ? '' : 'selected'}>Annan hall…</option></select></label>
+          <label ${known.includes(c.venue) ? 'hidden' : ''} class="othervenue">Annan hall<input name="venueOther" value="${known.includes(c.venue) ? '' : esc(c.venue)}"></label>
+          <label>Namn (valfritt)<input name="title" value="${esc(c.title)}" placeholder="t.ex. Träningsmatcher" maxlength="60"></label>
+        </div>
+        <fieldset><legend>Våra lag</legend><div class="row">${OUR_COLORS.map((col) => { const t = `${prefix} ${col}`; return `<label class="check"><input type="checkbox" name="our" value="${esc(t)}" ${c.ourTeams.includes(t) ? 'checked' : ''}> U9 ${col}</label>`; }).join('')}</div></fieldset>
+        <label>Motståndarlag <span class="small muted">ett lag per rad, skriv namnet som på swehockey, t.ex. ”Kista HC” eller ”Väsby IK HK vit”</span>
+          <textarea name="opponents" rows="4">${esc(c.opponents.join('\n'))}</textarea></label>
+        <fieldset><legend>Matcher</legend>
+          <div class="grid4">
+            <label>Första match<input type="time" name="start" value="${esc(c.start)}"></label>
+            <label>Minuter mellan matcher<input type="number" name="length" min="5" max="120" value="${c.length}"></label>
+          </div>
+          <div class="row"><button type="button" class="btn small" data-act="ce-roundrobin">Föreslå schema: alla möter alla</button><span class="small muted">Matcher som kan gå samtidigt läggs på olika planer. Du kan ändra allt efteråt.</span></div>
+          <div class="tablewrap"><table class="cematches"><thead><tr><th>Tid</th><th>Hemma</th><th>Borta</th><th>Plan</th><th></th></tr></thead><tbody>
+          ${c.matches.map((m, i) => `<tr>
+            <td><input type="time" name="mt" data-i="${i}" value="${esc(m.start || '')}"></td>
+            <td><select name="mh" data-i="${i}">${teamOpts(m.home)}</select></td>
+            <td><select name="ma" data-i="${i}">${teamOpts(m.away)}</select></td>
+            <td><select name="mp" data-i="${i}"><option value="">Auto</option>${[1, 2, 3, 4].map((n) => `<option ${Number(m.plan) === n ? 'selected' : ''}>${n}</option>`).join('')}</select></td>
+            <td><button type="button" class="linkbtn danger" data-act="ce-del" data-i="${i}">ta bort</button></td></tr>`).join('') || '<tr><td colspan="5" class="muted">Inga matcher ännu.</td></tr>'}
+          </tbody></table></div>
+          <button type="button" class="btn small" data-act="ce-add">+ Lägg till match</button>
+        </fieldset>
+        <div class="row"><button class="btn primary">Spara</button>
+          ${c.id ? `<a class="btn" href="#/matchinbjudan/${encodeURIComponent(customKey(c))}">Matchinbjudan</a><button type="button" class="linkbtn danger" data-act="ce-delete">Ta bort poolspelet</button>` : ''}</div>
+      </form>
+    </section>`;
+    const f = $('#ceform');
+    const read = () => {
+      c.date = f.date.value; c.title = f.title.value.trim();
+      c.venue = f.venueSel.value === '__other' ? f.venueOther.value.trim() : f.venueSel.value;
+      c.ourTeams = [...f.querySelectorAll('input[name=our]:checked')].map((x) => x.value);
+      c.opponents = f.opponents.value.split('\n').map((x) => x.trim()).filter(Boolean);
+      c.start = f.start.value || '10:00'; c.length = Number(f.length.value) || 20;
+      f.querySelectorAll('[name=mt]').forEach((x) => { c.matches[x.dataset.i].start = x.value; });
+      f.querySelectorAll('[name=mh]').forEach((x) => { c.matches[x.dataset.i].home = x.value; });
+      f.querySelectorAll('[name=ma]').forEach((x) => { c.matches[x.dataset.i].away = x.value; });
+      f.querySelectorAll('[name=mp]').forEach((x) => { c.matches[x.dataset.i].plan = x.value ? Number(x.value) : null; });
+    };
+    S.ce.read = read; S.ce.render = render;
+    f.venueSel.onchange = () => { f.querySelector('.othervenue').hidden = f.venueSel.value !== '__other'; };
+    f.querySelectorAll('input[name=our]').forEach((x) => (x.onchange = () => { read(); render(); }));
+    f.opponents.onchange = () => { read(); render(); };
+    f.onsubmit = async (e) => {
+      e.preventDefault(); read();
+      if (!c.venue) return toast('Ange en ishall.', true);
+      if (!c.ourTeams.length) return toast('Välj minst ett av våra lag.', true);
+      const matches = c.matches.filter((m) => m.home && m.away);
+      if (matches.some((m) => m.home === m.away)) return toast('Ett lag kan inte möta sig självt.', true);
+      try {
+        const nid = await B.saveCustomEvent({ id: c.id, date: c.date, venue: c.venue, title: c.title, data: { ourTeams: c.ourTeams, opponents: c.opponents, matches, start: c.start, length: c.length } });
+        await refreshState(); toast('Poolspelet är sparat. Det går nu att välja i Ny omgång.'); location.hash = `#/eget/${nid}`;
+      } catch (err) { toast(err.message, true); }
+    };
+  };
+  render();
+}
+// Alla möter alla (cirkelmetoden): varje runda blir en starttid, matcherna i rundan får plan 1, 2, ...
+function roundRobin(teams) {
+  const t = [...teams];
+  if (t.length % 2) t.push(null);
+  const rounds = [];
+  for (let r = 0; r < t.length - 1; r++) {
+    const games = [];
+    for (let i = 0; i < t.length / 2; i++) {
+      const a = t[i], b = t[t.length - 1 - i];
+      if (a && b) games.push(r % 2 ? [b, a] : [a, b]);
+    }
+    rounds.push(games);
+    t.splice(1, 0, t.pop());
+  }
+  return rounds;
+}
+
 // ---------- matchinbjudan ----------
 function eventView(key) {
   const ev = (S.state.homeEvents || []).find((e) => e.key === key);
   if (!ev) return null;
-  const data = S.state.invitations?.[key] || {};
+  const saved = S.state.invitations?.[key] || {};
+  const data = { ...saved, plans: { ...(ev.plans || {}), ...(saved.plans || {}) } };
   const arenaId = data.arena || arenaFor(ev.venue);
   const arena = { ...ARENAS[arenaId], address: data.address || ARENAS[arenaId].address };
   const matches = buildMatches(ev, data);
@@ -1406,6 +1516,23 @@ document.addEventListener('click', async (e) => {
         break;
       }
       case 'addreserve': reserveDialog(d.key); break;
+      case 'ce-add': {
+        S.ce.read(); const last = S.ce.matches[S.ce.matches.length - 1];
+        S.ce.matches.push({ start: last?.start ? addMinutes(last.start, S.ce.length) : S.ce.start, home: '', away: '', plan: null }); S.ce.render(); break;
+      }
+      case 'ce-del': S.ce.read(); S.ce.matches.splice(Number(d.i), 1); S.ce.render(); break;
+      case 'ce-roundrobin': {
+        S.ce.read();
+        const teams = [...S.ce.ourTeams, ...S.ce.opponents];
+        if (teams.length < 2) return toast('Välj våra lag och skriv in motståndarna först.', true);
+        if (S.ce.matches.length && !(await askConfirm('Ersätta matcherna i listan med ett nytt schema?'))) return;
+        const rr = roundRobin(teams);
+        S.ce.matches = rr.flatMap((games, r) => games.map(([home, away], i) => ({ start: addMinutes(S.ce.start, r * S.ce.length), home, away, plan: (i % 4) + 1 })));
+        S.ce.render(); toast(`${S.ce.matches.length} matcher föreslagna.`); break;
+      }
+      case 'ce-delete':
+        if (!(await askConfirm('Ta bort poolspelet? Omgångar som använder det visar en varning.'))) return;
+        await B.deleteCustomEvent(S.ce.id); await refreshState(); location.hash = '#/schema'; break;
       case 'catadd': { const n = $('#newcat').value.trim(); if (!n) return; await B.addCategory(n.slice(0, 40), (S.state.routineCategories || []).length + 1); await refreshState(); viewRoutines(); break; }
       case 'catrename': { const c = S.state.routineCategories.find((x) => x.id === d.id); const n = await askText('Nytt namn', c?.name); if (n?.trim()) { await B.updateCategory(d.id, { name: n.trim().slice(0, 40) }); await refreshState(); viewRoutines(); } break; }
       case 'catdelete': if (await askConfirm('Ta bort kategorin? Rutinerna i den blir kvar utan kategori.')) { await B.deleteCategory(d.id); await refreshState(); viewRoutines(); } break;
