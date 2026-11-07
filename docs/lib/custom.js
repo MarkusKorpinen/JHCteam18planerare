@@ -13,7 +13,7 @@ export function customToUppdrag(ev, age = 'U9') {
     const key = `${block}|${age}:${team}`;
     out[key] = {
       key, block, teamId: `${age}:${team}`, label: `${age} ${color || team}`, teamName: team, color,
-      kind: 'eget', group: ev.title || 'Eget poolspel', host: 'Järfälla HC', sourceUrl: null, custom: true,
+      kind: 'eget', group: ev.data?.type || 'Poolspel', host: 'Järfälla HC', sourceUrl: null, custom: true,
       date: ev.date, venue: ev.venue, missing: false, changes: [],
       matches: matches.filter((m) => m.home === team || m.away === team).map((m, i) => ({
         id: `${block}#${team}#${i}`, date: ev.date, start: m.start || null, home: m.home, away: m.away, venue: ev.venue, status: 'planerad', missing: false,
@@ -40,7 +40,8 @@ export function mergeCustom(state, events, age = 'U9') {
   const home = [...(state.homeEvents || [])];
   for (const ev of events || []) {
     Object.assign(uppdrag, customToUppdrag(ev, age));
-    home.push(customToHomeEvent(ev));
+    // Matchinbjudan bara för hemmaarrangemang som har matcher
+    if (ev.data?.home !== false && (ev.data?.matches || []).some((m) => m.home && m.away)) home.push(customToHomeEvent(ev));
   }
   home.sort((a, b) => a.date.localeCompare(b.date));
   return { ...state, schedule: { ...state.schedule, uppdrag }, homeEvents: home };

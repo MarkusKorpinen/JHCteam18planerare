@@ -130,7 +130,7 @@ async function route() {
     const rt = h.match(/^\/rutin\/([\w-]+)(?:\/(redigera|utskrift))?$/);
     const mi = h.match(/^\/matchinbjudan\/(.+?)(\/utskrift)?$/);
     const ce = h.match(/^\/eget\/([\w-]+)$/);
-    let tab = m ? 'omgangar' : rt ? 'rutiner' : mi || ce ? 'schema' : (h.slice(1) || 'omgangar');
+    let tab = m ? 'omgangar' : rt ? 'rutiner' : mi ? 'schema' : ce ? 'omgangar' : (h.slice(1) || 'omgangar');
     if (!planner && (tab === 'spelare' || tab === 'historik')) tab = 'omgangar';
     document.querySelectorAll('#tabs a').forEach((a) => a.classList.toggle('on', a.dataset.tab === tab));
     window.scrollTo(0, 0);
@@ -254,7 +254,8 @@ function viewTeams() {
         <span class="small muted block">${r.keys.map((k) => esc(U(k)?.label || '?') + ' ' + fDate(U(k)?.date)).join(' · ')}</span>
         <span class="small muted block">Fastställt ${fDT(r.confirmedAt)}</span>
       </a></li>`).join('')}</ul>` : '<p class="muted">Inga fastställda lag ännu.</p>'}
-  </section>`;
+  </section>
+  ${S.me.teamlead ? customPanel() : ''}`;
 }
 function viewRounds() {
   if (!S.me.planner) return viewTeams();
@@ -275,16 +276,17 @@ function viewRounds() {
         <span class="small muted block">Senast ändrad ${fDT(r.updatedAt)} av ${esc(r.updatedByName || '')}</span>
       </a></li>`).join('')}</ul>` : '<p class="muted">Inga omgångar ännu. Skapa den första nedan.</p>'}
   </section>
+  ${customPanel()}
   <section class="panel">
     <h2>Ny omgång</h2>
-    <p class="small muted">Välj de poolspel som ska planeras tillsammans. Samma trupp gäller för alla lagets matcher i ett poolspel.</p>
+    <p class="small muted">Välj de poolspel och matcher som ska planeras tillsammans (seriespel och egna). Samma trupp gäller för alla lagets matcher i ett poolspel.</p>
     <form id="newround" class="stack">
       ${[...groups].map(([d, us]) => `
         <fieldset class="dategroup"><legend>${fDate(d)} <button type="button" class="linkbtn" data-act="selday" data-date="${d}">välj alla</button></legend>
         ${us.map((u) => `<label class="pick">
             <input type="checkbox" name="k" value="${esc(u.key)}" ${S.newRoundSel.has(u.key) ? 'checked' : ''}>
             <span class="tdot" style="--c:${teamColor(u)}"></span>
-            <span><strong>${esc(u.label)}</strong> · ${esc(u.venue)} · ${u.matches.filter((m) => !m.missing).map((m) => m.start || '?').join(', ')}
+            <span><strong>${esc(u.label)}</strong>${u.custom ? ` <span class="badge">${esc(u.group)}</span>` : ''} · ${esc(u.venue)} · ${u.matches.filter((m) => !m.missing).map((m) => m.start || '?').join(', ')}
             ${u.missing ? '<span class="badge bad">Saknas i källan</span>' : ''}
             ${inRound.has(u.key) ? `<span class="small muted block">Ingår redan i ${esc(inRound.get(u.key))}</span>` : ''}</span>
           </label>`).join('')}
@@ -710,17 +712,10 @@ function viewSchedule() {
     <p class="small muted">Källa: den offentliga matchöversikten (JHCmatcher), som i sin tur läser stats.swehockey.se.</p>
   </section>
   <section class="panel">
-    <div class="row"><h2 style="flex:1;margin:0">Egna poolspel och matcher</h2>${S.me.planner || S.me.teamlead ? '<a class="btn primary" href="#/eget/ny">+ Nytt eget poolspel</a>' : ''}</div>
-    <p class="small muted">Poolspel och matcher som inte finns på swehockey. De går att planera lag till och göra matchinbjudan för, precis som de hämtade.</p>
-    ${(S.state.customEvents || []).filter((e) => e.date >= S.state.today).map((e) => `<div class="sched"><strong>${esc(fDate(e.date))}</strong> · ${esc(e.venue)}${e.title ? ` · ${esc(e.title)}` : ''}
-      <div class="small">${esc((e.data.ourTeams || []).join(', '))} · ${(e.data.matches || []).length} matcher</div>
-      <div class="row">${S.me.planner || S.me.teamlead ? `<a class="linkbtn" href="#/eget/${e.id}">ändra</a>` : ''}<a class="linkbtn" href="#/matchinbjudan/${encodeURIComponent(customKey(e))}">matchinbjudan</a></div></div>`).join('') || '<p class="small muted">Inga egna poolspel inlagda.</p>'}
-  </section>
-  <section class="panel">
     <h2>Hemmapoolspel – matchinbjudan</h2>
     ${(() => {
       const evs = (S.state.homeEvents || []).filter((e) => e.date >= S.state.today);
-      if (!evs.length) return '<p class="small muted">Inga kommande hemmapoolspel. Hela spelschemat för hemmapoolspel hämtas av den dagliga synken i GitHub, och egna poolspel läggs in ovan.</p>';
+      if (!evs.length) return '<p class="small muted">Inga kommande hemmapoolspel. Hela spelschemat för hemmapoolspel hämtas av den dagliga synken i GitHub, och egna matcher läggs in under Omgångar.</p>';
       return `<ul class="rounds">${evs.map((e) => `<li><a href="#/matchinbjudan/${encodeURIComponent(e.key)}">
         <span class="rname">${esc(fDate(e.date))} · ${esc(e.venue)}</span>${e.custom ? ' <span class="badge">Eget</span>' : ''}
         ${S.state.invitations?.[e.key] ? '<span class="badge ok">Inbjudan klar</span>' : '<span class="badge draft">Ej granskad</span>'}
@@ -1256,9 +1251,20 @@ document.addEventListener('pointerup', async (e) => {
   await act('move', { pid, fromKey, toKey, role, line: line === undefined || line === 'new' ? null : Number(line) });
 });
 
-// ---------- egna poolspel ----------
+// ---------- egna matchspel ----------
+const CE_TYPES = ['Träningsmatch', 'Poolspel', 'Cup'];
+function customPanel() {
+  const evs = (S.state.customEvents || []).filter((e) => e.date >= S.state.today).sort((a, b) => a.date.localeCompare(b.date));
+  return `<section class="panel">
+    <div class="row"><h2 style="flex:1;margin:0">Egna matcher och cuper</h2><a class="btn primary" href="#/eget/ny">+ Lägg till</a></div>
+    <p class="small muted">Träningsmatcher, egna poolspel och cuper utöver seriespelet.</p>
+    ${evs.map((e) => { const n = (e.data.matches || []).length; return `<a class="sched block" href="#/eget/${e.id}" style="text-decoration:none;color:inherit">
+      <strong>${esc(fDate(e.date))}</strong> · ${esc(e.data.type || 'Poolspel')}${e.title ? ` – ${esc(e.title)}` : ''} <span class="badge">${e.data.home === false ? 'Borta' : 'Hemma'}</span>
+      <span class="small block">${esc(e.venue)} · ${esc((e.data.ourTeams || []).map((t) => t.split(' ').pop()).join(', '))} · ${n ? `${n} matcher` : '<span class="badge bad">Matcher saknas</span>'}</span></a>`; }).join('') || '<p class="small muted">Inga inlagda.</p>'}
+  </section>`;
+}
 function editCustomEvent(id) {
-  if (!(S.me.planner || S.me.teamlead)) { app.innerHTML = '<div class="alert warn">Bara lagledare och lagplanerare kan lägga in egna poolspel.</div>'; return; }
+  if (!(S.me.planner || S.me.teamlead)) { app.innerHTML = '<div class="alert warn">Bara lagledare och lagplanerare kan lägga in egna matcher.</div>'; return; }
   const ev = id ? (S.state.customEvents || []).find((e) => e.id === id) : null;
   if (id && !ev) { app.innerHTML = '<div class="alert warn">Poolspelet finns inte.</div>'; return; }
   const prefix = S.state.settings.teamPrefix || 'Järfälla HC';
@@ -1268,31 +1274,39 @@ function editCustomEvent(id) {
     venue: ev?.venue || 'Järfälla Ishall', ourTeams: [...(ev?.data.ourTeams || [])],
     opponents: [...(ev?.data.opponents || [])], matches: (ev?.data.matches || []).map((m) => ({ ...m })),
     start: ev?.data.start || '10:00', length: ev?.data.length || 20,
+    type: ev?.data.type || 'Poolspel', home: ev?.data.home !== false,
   };
   const allTeams = () => [...S.ce.ourTeams, ...S.ce.opponents.filter(Boolean)];
   const render = () => {
     const c = S.ce, teams = allTeams();
+    const savedMatches = (ev?.data.matches || []).filter((m) => m.home && m.away).length;
+    const existing = c.id ? S.state.rounds.find((r) => r.keys.some((k) => k.startsWith(`custom:${c.id}|`))) : null;
     const teamOpts = (sel) => `<option value="">Välj lag</option>${teams.map((t) => `<option ${t === sel ? 'selected' : ''}>${esc(t)}</option>`).join('')}`;
     app.innerHTML = `
-    <a href="#/schema" class="back">← Schema</a>
+    <a href="#/omgangar" class="back">← Omgångar</a>
     <section class="panel">
-      <h2>${c.id ? 'Ändra eget poolspel' : 'Nytt eget poolspel'}</h2>
+      <h2>${c.id ? `Ändra ${esc(c.type.toLowerCase())}` : 'Nytt matchspel'}</h2>
+      <p class="small muted">Träningsmatcher, egna poolspel och cuper som inte finns i seriespelet. När matcherna är inlagda kan du planera lagen och, om ni är hemmalag, göra en matchinbjudan.</p>
       <form id="ceform" class="stack">
+        <fieldset><legend>1. Vad och var</legend>
         <div class="grid4">
+          <label>Typ<select name="type">${CE_TYPES.map((t) => `<option ${c.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+          <label>Hemma eller borta<select name="home"><option value="1" ${c.home ? 'selected' : ''}>Hemma – vi arrangerar</option><option value="0" ${c.home ? '' : 'selected'}>Borta – vi åker dit</option></select></label>
           <label>Datum<input type="date" name="date" value="${esc(c.date)}" required></label>
           <label>Ishall<select name="venueSel">${known.map((v) => `<option ${c.venue === v ? 'selected' : ''}>${v}</option>`).join('')}<option value="__other" ${known.includes(c.venue) ? '' : 'selected'}>Annan hall…</option></select></label>
           <label ${known.includes(c.venue) ? 'hidden' : ''} class="othervenue">Annan hall<input name="venueOther" value="${known.includes(c.venue) ? '' : esc(c.venue)}"></label>
-          <label>Namn (valfritt)<input name="title" value="${esc(c.title)}" placeholder="t.ex. Träningsmatcher" maxlength="60"></label>
-        </div>
-        <fieldset><legend>Våra lag</legend><div class="row">${OUR_COLORS.map((col) => { const t = `${prefix} ${col}`; return `<label class="check"><input type="checkbox" name="our" value="${esc(t)}" ${c.ourTeams.includes(t) ? 'checked' : ''}> U9 ${col}</label>`; }).join('')}</div></fieldset>
+          <label>Namn (valfritt)<input name="title" value="${esc(c.title)}" placeholder="t.ex. Luciacupen" maxlength="60"></label>
+        </div></fieldset>
+        <fieldset><legend>2. Lag</legend>
+        <p class="small muted" style="margin:0">Våra lag som spelar:</p><div class="row">${OUR_COLORS.map((col) => { const t = `${prefix} ${col}`; return `<label class="check"><input type="checkbox" name="our" value="${esc(t)}" ${c.ourTeams.includes(t) ? 'checked' : ''}> U9 ${col}</label>`; }).join('')}</div>
         <label>Motståndarlag <span class="small muted">ett lag per rad, skriv namnet som på swehockey, t.ex. ”Kista HC” eller ”Väsby IK HK vit”</span>
-          <textarea name="opponents" rows="4">${esc(c.opponents.join('\n'))}</textarea></label>
-        <fieldset><legend>Matcher</legend>
+          <textarea name="opponents" rows="4">${esc(c.opponents.join('\n'))}</textarea></label></fieldset>
+        <fieldset><legend>3. Matcher</legend>
           <div class="grid4">
             <label>Första match<input type="time" name="start" value="${esc(c.start)}"></label>
             <label>Minuter mellan matcher<input type="number" name="length" min="5" max="120" value="${c.length}"></label>
           </div>
-          <div class="row"><button type="button" class="btn small" data-act="ce-roundrobin">Föreslå schema: alla möter alla</button><span class="small muted">Matcher som kan gå samtidigt läggs på olika planer. Du kan ändra allt efteråt.</span></div>
+          <div class="row"><button type="button" class="btn small" data-act="ce-roundrobin">Föreslå schema: alla möter alla</button><span class="small muted">Matcher som kan gå samtidigt läggs på olika planer. Ändra fritt efteråt.</span></div>
           <div class="tablewrap"><table class="cematches"><thead><tr><th>Tid</th><th>Hemma</th><th>Borta</th><th>Plan</th><th></th></tr></thead><tbody>
           ${c.matches.map((m, i) => `<tr>
             <td><input type="time" name="mt" data-i="${i}" value="${esc(m.start || '')}"></td>
@@ -1304,12 +1318,16 @@ function editCustomEvent(id) {
           <button type="button" class="btn small" data-act="ce-add">+ Lägg till match</button>
         </fieldset>
         <div class="row"><button class="btn primary">Spara</button>
-          ${c.id ? `<a class="btn" href="#/matchinbjudan/${encodeURIComponent(customKey(c))}">Matchinbjudan</a><button type="button" class="linkbtn danger" data-act="ce-delete">Ta bort poolspelet</button>` : ''}</div>
+          ${c.id ? '<button type="button" class="linkbtn danger" data-act="ce-delete">Ta bort</button>' : ''}</div>
+        ${c.id ? `<fieldset><legend>4. Nästa steg</legend><div class="stack">
+          ${S.me.planner ? (existing ? `<a class="btn" href="#/omgang/${existing.id}">Planera lagen – öppna ${esc(existing.name)}</a>` : `<button type="button" class="btn" data-act="ce-round" ${savedMatches ? '' : 'disabled'}>Planera lagen – skapa omgång med lagförslag</button>`) : ''}
+          ${c.home ? (savedMatches ? `<a class="btn" href="#/matchinbjudan/${encodeURIComponent(customKey(c))}">Gör matchinbjudan</a>` : '<p class="small muted">Matchinbjudan kan göras när matcherna är inlagda och sparade.</p>') : ''}
+        </div></fieldset>` : ''}
       </form>
     </section>`;
     const f = $('#ceform');
     const read = () => {
-      c.date = f.date.value; c.title = f.title.value.trim();
+      c.date = f.date.value; c.title = f.title.value.trim(); c.type = f.type.value; c.home = f.home.value === '1';
       c.venue = f.venueSel.value === '__other' ? f.venueOther.value.trim() : f.venueSel.value;
       c.ourTeams = [...f.querySelectorAll('input[name=our]:checked')].map((x) => x.value);
       c.opponents = f.opponents.value.split('\n').map((x) => x.trim()).filter(Boolean);
@@ -1330,8 +1348,8 @@ function editCustomEvent(id) {
       const matches = c.matches.filter((m) => m.home && m.away);
       if (matches.some((m) => m.home === m.away)) return toast('Ett lag kan inte möta sig självt.', true);
       try {
-        const nid = await B.saveCustomEvent({ id: c.id, date: c.date, venue: c.venue, title: c.title, data: { ourTeams: c.ourTeams, opponents: c.opponents, matches, start: c.start, length: c.length } });
-        await refreshState(); toast('Poolspelet är sparat. Det går nu att välja i Ny omgång.'); location.hash = `#/eget/${nid}`;
+        const nid = await B.saveCustomEvent({ id: c.id, date: c.date, venue: c.venue, title: c.title, data: { type: c.type, home: c.home, ourTeams: c.ourTeams, opponents: c.opponents, matches, start: c.start, length: c.length } });
+        await refreshState(); toast('Sparat.'); if (location.hash === `#/eget/${nid}`) editCustomEvent(nid); else location.hash = `#/eget/${nid}`;
       } catch (err) { toast(err.message, true); }
     };
   };
@@ -1520,6 +1538,13 @@ document.addEventListener('click', async (e) => {
         S.ce.read(); const last = S.ce.matches[S.ce.matches.length - 1];
         S.ce.matches.push({ start: last?.start ? addMinutes(last.start, S.ce.length) : S.ce.start, home: '', away: '', plan: null }); S.ce.render(); break;
       }
+      case 'ce-round': {
+        const keys = Object.keys(S.state.schedule.uppdrag || {}).filter((k) => k.startsWith(`custom:${S.ce.id}|`));
+        if (!keys.length) return toast('Spara matcherna först.', true);
+        const name = `${S.ce.title || S.ce.type} ${fDate(S.ce.date)}`;
+        const round = await B.createRound(newRound(name, keys, S.state.settings.roundDefaults, ctx()));
+        await refreshState(); location.hash = `#/omgang/${round.id}`; break;
+      }
       case 'ce-del': S.ce.read(); S.ce.matches.splice(Number(d.i), 1); S.ce.render(); break;
       case 'ce-roundrobin': {
         S.ce.read();
@@ -1531,8 +1556,8 @@ document.addEventListener('click', async (e) => {
         S.ce.render(); toast(`${S.ce.matches.length} matcher föreslagna.`); break;
       }
       case 'ce-delete':
-        if (!(await askConfirm('Ta bort poolspelet? Omgångar som använder det visar en varning.'))) return;
-        await B.deleteCustomEvent(S.ce.id); await refreshState(); location.hash = '#/schema'; break;
+        if (!(await askConfirm('Ta bort? Omgångar som använder matcherna visar en varning.'))) return;
+        await B.deleteCustomEvent(S.ce.id); await refreshState(); location.hash = '#/omgangar'; break;
       case 'catadd': { const n = $('#newcat').value.trim(); if (!n) return; await B.addCategory(n.slice(0, 40), (S.state.routineCategories || []).length + 1); await refreshState(); viewRoutines(); break; }
       case 'catrename': { const c = S.state.routineCategories.find((x) => x.id === d.id); const n = await askText('Nytt namn', c?.name); if (n?.trim()) { await B.updateCategory(d.id, { name: n.trim().slice(0, 40) }); await refreshState(); viewRoutines(); } break; }
       case 'catdelete': if (await askConfirm('Ta bort kategorin? Rutinerna i den blir kvar utan kategori.')) { await B.deleteCategory(d.id); await refreshState(); viewRoutines(); } break;
