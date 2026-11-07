@@ -1,4 +1,4 @@
-// JHC U9 lagplanerare – gränssnitt. Koden innehåller ingen spelardata; den hämtas efter inloggning.
+// Järfälla HC Team 2018 – gränssnitt. Koden innehåller ingen spelardata; den hämtas efter inloggning.
 import { CONFIG } from './config.js';
 import { createSupabaseBackend } from './backend-supabase.js';
 import { createDemoBackend } from './backend-demo.js';
@@ -63,6 +63,30 @@ function download(name, data) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' }));
   a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+
+// Egna dialogrutor i stället för webbläsarens prompt/confirm, som vissa mobiler och appar blockerar
+function ask(html, init) {
+  return new Promise((resolve) => {
+    const d = $('#ask');
+    d.innerHTML = html;
+    d.onclose = () => resolve(d.returnValue);
+    d.showModal();
+    init?.(d);
+  });
+}
+async function askConfirm(text) {
+  const v = await ask(`<form method="dialog" class="stack"><p>${esc(text)}</p><div class="row"><button class="btn primary" value="ok">OK</button><button class="btn" value="cancel" formnovalidate>Avbryt</button></div></form>`);
+  return v === 'ok';
+}
+async function askText(title, value = '', { multiline = false, ok = 'Spara' } = {}) {
+  let out = null;
+  const v = await ask(`<form method="dialog" class="stack"><label><strong>${esc(title)}</strong>
+    ${multiline ? `<textarea name="t" rows="4" maxlength="1000">${esc(value)}</textarea>` : `<input name="t" value="${esc(value)}" maxlength="120">`}</label>
+    <div class="row"><button class="btn primary" value="ok">${esc(ok)}</button><button class="btn" value="cancel" formnovalidate>Avbryt</button></div></form>`,
+    (d) => { const f = d.querySelector('[name=t]'); f.focus(); d.querySelector('form').onsubmit = () => { out = f.value; }; });
+  return v === 'ok' ? out : null;
 }
 
 // ---------- start och routning ----------
@@ -148,7 +172,7 @@ function viewLogin(msg) {
   $('#top').hidden = true;
   app.innerHTML = `
   <section class="auth">
-    <h1>JHC U9 lagplanerare</h1>
+    <h1>Järfälla HC Team 2018</h1>
     ${configured ? `
     <p class="muted">Endast för inbjudna ledare.</p>
     ${msg ? `<div class="alert warn">${esc(msg)}</div>` : ''}
@@ -1373,19 +1397,19 @@ document.addEventListener('click', async (e) => {
       }
       case 'player': playerDialog(d.pid, d.key || null); break;
       case 'propose':
-        if (!confirm('Skapa nytt förslag? Placeringar som inte är låsta fördelas om.')) return;
+        if (!await askConfirm('Skapa nytt förslag? Placeringar som inte är låsta fördelas om.')) return;
         if (await act('propose')) toast('Nytt förslag skapat.');
         break;
       case 'confirm': {
         const errs = Object.values(S.view.validation.perTeam).flat().filter((x) => x.level === 'error' || x.level === 'review').length;
-        if (!confirm(errs ? `Det finns ${errs} varningar. Fastställa ändå?` : 'Fastställa omgången? Lagen sparas i historiken.')) return;
+        if (!await askConfirm(errs ? `Det finns ${errs} varningar. Fastställa ändå?` : 'Fastställa omgången? Lagen sparas i historiken.')) return;
         if (await act('confirm')) toast('Omgången är fastställd.');
         break;
       }
       case 'reopen': if (await act('reopen')) toast('Omgången är ett utkast igen.'); break;
-      case 'rename': { const n = prompt('Nytt namn på omgången', S.round.name); if (n) await act('rename', { name: n }); break; }
+      case 'rename': { const n = await askText('Nytt namn på omgången', S.round.name); if (n) await act('rename', { name: n }); break; }
       case 'ack': await B.ackChanges(d.key); await refreshState(); renderRound(true); break;
-      case 'delcomment': if (confirm('Ta bort kommentaren?')) { await B.deleteComment(d.id); await reloadRound(); } break;
+      case 'delcomment': if (await askConfirm('Ta bort kommentaren?')) { await B.deleteComment(d.id); await reloadRound(); } break;
       case 'copyteam': {
         const t = S.round.teams[d.key];
         await copyText(S.view.copy[d.key]);
@@ -1396,16 +1420,16 @@ document.addEventListener('click', async (e) => {
       case 'markread': await B.markPoolRead(d.key); await refreshState(); renderRound(true); break;
       case 'poolcomment': {
         const u = U(d.key);
-        const text = prompt(`Kommentar till lagplanerarna om ${u?.label} ${fDate(u?.date)}:`);
+        const text = await askText(`Kommentar till lagplanerarna om ${u?.label} ${fDate(u?.date)}`, '', { multiline: true, ok: 'Skicka' });
         if (!text?.trim()) return;
         await B.addPoolComment(d.key, text.trim().slice(0, 1000)); await refreshState(); viewSchedule(); toast('Kommentaren är skickad till lagplanerarna.');
         break;
       }
-      case 'delpoolcomment': if (confirm('Ta bort kommentaren?')) { await B.deletePoolComment(d.id); await refreshState(); viewSchedule(); } break;
+      case 'delpoolcomment': if (await askConfirm('Ta bort kommentaren?')) { await B.deletePoolComment(d.id); await refreshState(); viewSchedule(); } break;
       case 'catadd': { const n = $('#newcat').value.trim(); if (!n) return; await B.addCategory(n.slice(0, 40), (S.state.routineCategories || []).length + 1); await refreshState(); viewRoutines(); break; }
-      case 'catrename': { const c = S.state.routineCategories.find((x) => x.id === d.id); const n = prompt('Nytt namn', c?.name); if (n?.trim()) { await B.updateCategory(d.id, { name: n.trim().slice(0, 40) }); await refreshState(); viewRoutines(); } break; }
-      case 'catdelete': if (confirm('Ta bort kategorin? Rutinerna i den blir kvar utan kategori.')) { await B.deleteCategory(d.id); await refreshState(); viewRoutines(); } break;
-      case 'routinedelete': if (confirm('Ta bort rutinen? Det går inte att ångra.')) { await B.deleteRoutine(d.id); await refreshState(); location.hash = '#/rutiner'; } break;
+      case 'catrename': { const c = S.state.routineCategories.find((x) => x.id === d.id); const n = await askText('Nytt namn', c?.name); if (n?.trim()) { await B.updateCategory(d.id, { name: n.trim().slice(0, 40) }); await refreshState(); viewRoutines(); } break; }
+      case 'catdelete': if (await askConfirm('Ta bort kategorin? Rutinerna i den blir kvar utan kategori.')) { await B.deleteCategory(d.id); await refreshState(); viewRoutines(); } break;
+      case 'routinedelete': if (await askConfirm('Ta bort rutinen? Det går inte att ångra.')) { await B.deleteRoutine(d.id); await refreshState(); location.hash = '#/rutiner'; } break;
       case 'additem': { const box = document.querySelector(`.items[data-list="${d.list}"]`); const i = document.createElement('input'); i.name = d.list; i.placeholder = 'En punkt per rad'; box.append(i); i.focus(); break; }
       case 'coaches': coachDialog(d.key); break;
       case 'coachkids': kidsDialog(d.id); break;
@@ -1416,13 +1440,13 @@ document.addEventListener('click', async (e) => {
         await B.addCoach(name); await refreshState(); viewPlayers(); toast('Tränaren är tillagd.'); break;
       }
       case 'coacharchive': await B.updateCoach(d.id, { active: d.on === '1' }); await refreshState(); viewPlayers(); break;
-      case 'coachrename': { const n = prompt('Nytt namn', C(d.id)?.name); if (n?.trim()) { await B.updateCoach(d.id, { name: n.trim().slice(0, 60) }); await refreshState(); viewPlayers(); } break; }
-      case 'logoremove': if (confirm('Ta bort loggan?')) { await B.saveSettings({ ...S.state.settings, logo: null }, {}); await refreshState(); viewLeaders(); } break;
+      case 'coachrename': { const n = await askText('Nytt namn', C(d.id)?.name); if (n?.trim()) { await B.updateCoach(d.id, { name: n.trim().slice(0, 60) }); await refreshState(); viewPlayers(); } break; }
+      case 'logoremove': if (await askConfirm('Ta bort loggan?')) { await B.saveSettings({ ...S.state.settings, logo: null }, {}); await refreshState(); viewLeaders(); } break;
       case 'copyall': await copyText(S.view.copy.all); toast('Laglistor för hela omgången är kopierade.'); break;
       case 'reload': $('#conflict').innerHTML = ''; S.pending = null; await refreshState(); await reloadRound(); break;
       case 'force': if (S.pending) { $('#conflict').innerHTML = ''; await act(S.pending.type, S.pending.extra, { force: true }); } break;
       case 'delround':
-        if (!confirm('Ta bort omgången? Det går inte att ångra.')) return;
+        if (!await askConfirm('Ta bort omgången? Det går inte att ångra.')) return;
         await B.deleteRound(S.round.id); await refreshState(); location.hash = '#/'; break;
       case 'sync': {
         b.disabled = true; b.textContent = 'Hämtar…';
@@ -1442,10 +1466,10 @@ document.addEventListener('click', async (e) => {
       case 'copylink': await copyText($('#linkfield').value); toast('Länken är kopierad.'); break;
       case 'newlink': await makeInvite(d.email); break;
 
-      case 'deluser': if (confirm('Ta bort ledaren? Kontot raderas och personen förlorar åtkomst direkt.')) { await B.removeLeader(d.id); viewLeaders(); } break;
+      case 'deluser': if (await askConfirm('Ta bort ledaren? Kontot raderas och personen förlorar åtkomst direkt.')) { await B.removeLeader(d.id); viewLeaders(); } break;
       case 'delinvite': await B.deleteInvite(d.id); viewLeaders(); break;
       case 'backup': download(`jhc-lagplanerare-${stockholmToday()}.json`, await B.exportAll()); break;
-      case 'demoreset': if (confirm('Börja om demon med nya påhittade spelare?')) { await B.reset(); S.state = null; route.reload = true; location.hash = '#/'; route(); } break;
+      case 'demoreset': if (await askConfirm('Börja om demon med nya påhittade spelare?')) { await B.reset(); S.state = null; route.reload = true; location.hash = '#/'; route(); } break;
     }
   } catch (err) {
     if (err.status === 401) { S.me = null; viewLogin(err.message); } else toast(err.message, true);
