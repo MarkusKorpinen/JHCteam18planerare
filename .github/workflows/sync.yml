@@ -1,4 +1,4 @@
-name: Synka matchschema
-on: { schedule: [ { cron: '41 5 * * *' } ], workflow_dispatch: {} }
-permissions: { contents: read }
-jobs: { sync: { runs-on: ubuntu-latest, timeout-minutes: 5, steps: [ { uses: actions/checkout@v7 }, { name: Hamta schemat, run: node scripts/sync.mjs, env: { SUPABASE_URL: '${{ secrets.SUPABASE_URL }}', SUPABASE_SERVICE_ROLE_KEY: '${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}' } } ] } }
+   name: Synka matchschema
+   on: { schedule: [ { cron: '41 5 * * *' } ], workflow_dispatch: {} }
+   permissions: { contents: read }
+   jobs: { sync: { runs-on: ubuntu-latest, timeout-minutes: 15, steps: [ { uses: actions/checkout@v7 }, { name: Hamta schemat, run: node scripts/sync.mjs, env: { SUPABASE_URL: '${{ secrets.SUPABASE_URL }}', SUPABASE_SERVICE_ROLE_KEY: '${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}' } }, { name: Hamta matchsidans swehockey-lasare, uses: actions/checkout@v7, with: { repository: markuskorpinen/JHCmatcher, path: jhcmatcher } }, { uses: actions/setup-python@v7, with: { python-version: '3.12' } }, { name: Installera beroenden, run: pip install -r jhcmatcher/requirements.txt }, { name: Hemmapoolspel och trojfarger, run: python scripts/home_events.py, env: { SUPABASE_URL: '${{ secrets.SUPABASE_URL }}', SUPABASE_SERVICE_ROLE_KEY: '${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}' } } ] } }
