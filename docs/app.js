@@ -2,7 +2,7 @@
 import { CONFIG } from './config.js';
 import { createSupabaseBackend } from './backend-supabase.js';
 import { createDemoBackend } from './backend-demo.js';
-import { RULES } from './lib/planner.js';
+import { RULES, isReserve } from './lib/planner.js';
 import { playersFromCsv } from './lib/csv.js';
 import { runSync } from './lib/schedule.js';
 import { ACTIONS, ALLOWED_WHEN_CONFIRMED, newRound, addLog, snapshot, view, pendingReview } from './lib/rounds.js';
@@ -36,12 +36,16 @@ const P = (id) => S.state.players.find((p) => p.id === id);
 const levelNames = () => S.state.settings.levels.map((l) => l.name);
 const levelColor = (name) => S.state.settings.levels.find((l) => l.name === name)?.color || '#999';
 const teamColor = (u) => TEAM_COLORS[u?.color] || '#667';
+const res = (p) => (isReserve(p) ? 1 : 0);
 const isAvail = (key, pid) => S.state.availability?.[key]?.[pid] !== false;
 const opponent = (u, m) => (m.home === u?.teamName ? m.away : m.home);
 const ctx = () => ({
   uppdrag: S.state.schedule.uppdrag || {}, players: S.state.players, availability: S.state.availability,
   levels: levelNames(), history: S.state.history, teamPrefix: S.state.settings.teamPrefix, me: S.me, changes: S.state.changes,
+  coaches: S.state.coaches || [],
 });
+const C = (id) => (S.state.coaches || []).find((c) => c.id === id);
+const teamFullName = (key) => `${S.state.settings.teamPrefix || ''} ${U(key)?.label || ''}`.trim();
 
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); }
@@ -86,6 +90,9 @@ async function route() {
   $('#who').innerHTML = `${esc(S.me.name)} · <button class="linkbtn" data-act="logout">${B.mode === 'demo' ? 'Avsluta demo' : 'Logga ut'}</button>`;
   try {
     if (!S.state || route.reload) { await refreshState(); route.reload = false; maybeAutoSync(); }
+    const pr = h.match(/^\/utskrift\/([\w-]+)(?:\/(.+))?$/);
+    if (pr) return await viewPrint(pr[1], pr[2] ? decodeURIComponent(pr[2]) : null);
+    document.body.classList.remove('printmode');
     const m = h.match(/^\/omgang\/([\w-]+)/);
     const tab = m ? 'omgangar' : (h.slice(1) || 'omgangar');
     document.querySelectorAll('#tabs a').forEach((a) => a.classList.toggle('on', a.dataset.tab === tab));
@@ -304,7 +311,7 @@ function chip(pid, key) {
   if (!p) return '<span class="pl gone">Okänd spelare</span>';
   const bad = key && !isAvail(key, pid);
   return `<button class="pl${bad ? ' bad' : ''}" data-act="player" data-pid="${pid}" data-key="${esc(key || '')}" title="${esc(p.level)}${p.canGoalie ? ', kan stå i mål' : ''}">
-    <span class="ldot" style="--c:${levelColor(p.level)}"></span>${esc(p.name)}${p.canGoalie ? '<span class="mv">MV</span>' : ''}${key && isLocked(pid, key) ? '<span class="lock" aria-label="låst">🔒</span>' : ''}</button>`;
+    <span class="ldot" style="--c:${levelColor(p.level)}"></span>${esc(p.name)}${p.canGoalie ? '<span class="mv">MV</span>' : ''}${isReserve(p) ? '<span class="res" title="Reserv">R</span>' : ''}${key && isLocked(pid, key) ? '<span class="lock" aria-label="låst">🔒</span>' : ''}</button>`;
 }
 
 function teamCard(key) {
@@ -334,13 +341,23 @@ function teamCard(key) {
       <div class="counts">
         <span class="${t.goalies.length < s.goalies ? 'neg' : ''}">Målvakt ${t.goalies.length}/${s.goalies}</span>
         <span class="${skaters.length < s.skaters ? 'neg' : ''}">Utespelare ${skaters.length}/${s.skaters}</span>
+        ${(() => { const n = [...t.goalies, ...skaters].filter((id) => isReserve(P(id))).length; return n ? `<span class="resn">${n} reserv${n > 1 ? 'er' : ''}</span>` : ''; })()}
         <span class="dist">${Object.entries(dist).map(([l, n]) => `<span title="${esc(l)}"><span class="ldot" style="--c:${levelColor(l)}"></span>${n}</span>`).join('')}</span>
       </div>
       ${v.filter((x) => x.level !== 'review').map((x) => `<div class="warnline ${x.level}">${esc(x.text)}</div>`).join('')}
       <h4>Målvakt</h4>
       <div class="chips">${t.goalies.map((id) => chip(id, key)).join('') || '<span class="empty">Ingen målvakt</span>'}</div>
       ${t.lines.map((l, i) => `<h4>Kedja ${i + 1} <span class="muted small">(${l.length})</span></h4><div class="chips">${l.map((id) => chip(id, key)).join('')}</div>`).join('') || '<h4>Utespelare</h4><span class="empty">Inga utespelare</span>'}
-      <div class="row cardactions"><button class="btn" data-act="copyteam" data-key="${esc(key)}">Kopiera laglista</button></div>
+      <h4>Tränare</h4>
+      <div class="chips">${(t.coaches || []).map((id) => `<span class="coach">${esc(C(id)?.name || 'Okänd tränare')}</span>`).join('') || '<span class="muted small">Ingen tränare vald</span>'}</div>
+      <div class="row cardactions">
+        ${r.status !== 'fastställt' ? `<button class="btn small" data-act="addreserve" data-key="${esc(key)}">+ Lägg till reserv</button>` : ''}
+        <button class="btn small" data-act="coaches" data-key="${esc(key)}">Välj tränare</button>
+      </div>
+      <div class="row cardactions">
+        <button class="btn" data-act="copyteam" data-key="${esc(key)}">Kopiera laglista</button>
+        <a class="btn" href="#/utskrift/${r.id}/${encodeURIComponent(key)}">Laglista som PDF</a>
+      </div>
       <details class="comments" ${comments.length ? 'open' : ''}>
         <summary>Kommentarer (${comments.length})</summary>
         ${comments.map((c) => `<div class="comment"><div class="small muted">${esc(c.name)} · ${fDT(c.at)} ${c.userId === S.me.id || S.me.role === 'admin' ? `<button class="linkbtn" data-act="delcomment" data-id="${c.id}">ta bort</button>` : ''}</div>${esc(c.text)}</div>`).join('')}
@@ -355,7 +372,7 @@ function renderRound(keepScroll) {
   S.view = view(r, ctx());
   const y = window.scrollY;
   const confirmed = r.status === 'fastställt';
-  const players = S.state.players.filter((p) => p.active !== false).sort((a, b) => a.name.localeCompare(b.name, 'sv'));
+  const players = S.state.players.filter((p) => p.active !== false).sort((a, b) => res(a) - res(b) || a.name.localeCompare(b.name, 'sv'));
   app.innerHTML = `
   <a href="#/" class="back">← Omgångar</a>
   <div id="conflict"></div>
@@ -366,6 +383,7 @@ function renderRound(keepScroll) {
     <div class="row">
       ${!confirmed ? '<button class="btn primary" data-act="propose">Skapa nytt förslag</button>' : ''}
       <button class="btn" data-act="copyall">Kopiera laglista för hela omgången</button>
+      <a class="btn" href="#/utskrift/${r.id}">PDF för hela omgången</a>
       ${!confirmed ? '<button class="btn ok" data-act="confirm">Fastställ</button>' : '<button class="btn" data-act="reopen">Öppna som utkast</button>'}
     </div>
     ${!confirmed ? '<p class="small muted">Nytt förslag behåller låsta placeringar (🔒) och fördelar om alla andra.</p>' : ''}
@@ -385,13 +403,18 @@ function renderRound(keepScroll) {
   <div class="cards">${r.keys.map(teamCard).join('')}</div>
   <section class="panel">
     <h2>Ej uttagna <span class="small muted">(tillgängliga för minst ett poolspel)</span></h2>
-    <div class="chips">${S.view.validation.unplaced.map((id) => chip(id, '')).join('') || '<span class="muted">Alla tillgängliga spelare är uttagna.</span>'}</div>
+    ${(() => {
+      const un = S.view.validation.unplaced.map(P).filter(Boolean);
+      const ord = un.filter((p) => !isReserve(p)), rs = un.filter(isReserve);
+      return `<h4>Ordinarie</h4><div class="chips">${ord.map((p) => chip(p.id, '')).join('') || '<span class="muted small">Alla ordinarie som kan är uttagna.</span>'}</div>
+      <h4>Reserver</h4><div class="chips">${rs.map((p) => chip(p.id, '')).join('') || '<span class="muted small">Inga lediga reserver.</span>'}</div>`;
+    })()}
   </section>
   <details class="panel" id="avail">
     <summary><strong>Tillgänglighet</strong> <span class="small muted">markera vilka som inte kan</span></summary>
     <div class="tablewrap"><table class="avail">
       <thead><tr><th>Spelare</th>${r.keys.map((k) => `<th><span class="tdot" style="--c:${teamColor(U(k))}"></span>${esc((U(k)?.label || '').replace('U9 ', ''))}<br><span class="small">${fDate(U(k)?.date)}</span></th>`).join('')}</tr></thead>
-      <tbody>${players.map((p) => `<tr><th><span class="ldot" style="--c:${levelColor(p.level)}"></span>${esc(p.name)}${p.canGoalie ? ' <span class="mv">MV</span>' : ''}</th>
+      <tbody>${players.map((p) => `<tr><th><span class="ldot" style="--c:${levelColor(p.level)}"></span>${esc(p.name)}${p.canGoalie ? ' <span class="mv">MV</span>' : ''}${isReserve(p) ? '<span class="res">R</span>' : ''}</th>
         ${r.keys.map((k) => `<td><label class="tog"><input type="checkbox" data-act="avail" data-key="${esc(k)}" data-pid="${p.id}" ${isAvail(k, p.id) ? 'checked' : ''}><span>${isAvail(k, p.id) ? 'Kan' : 'Kan inte'}</span></label></td>`).join('')}</tr>`).join('')}</tbody>
     </table></div>
   </details>
@@ -436,7 +459,7 @@ function playerDialog(pid, fromKey) {
   dlg.innerHTML = `
   <form method="dialog" class="stack" id="pform">
     <h2>${esc(p.name)}</h2>
-    <p class="small"><span class="ldot" style="--c:${levelColor(p.level)}"></span>${esc(p.level)} · ${p.canGoalie ? 'kan stå i mål' : 'utespelare'}</p>
+    <p class="small"><span class="ldot" style="--c:${levelColor(p.level)}"></span>${esc(p.level)} · ${p.canGoalie ? 'kan stå i mål' : 'utespelare'} · ${isReserve(p) ? 'reserv' : 'ordinarie'}</p>
     <p class="small muted">${places.length ? 'Uttagen: ' + places.map((x) => `${esc(U(x.key)?.label)} ${fDate(U(x.key)?.date)} (${x.role === 'G' ? 'målvakt' : 'kedja ' + (x.line + 1)})`).join(', ') : 'Inte uttagen i omgången.'}</p>
     ${confirmed ? '<p class="alert warn small">Omgången är fastställd. Öppna den som utkast för att flytta spelare.</p>' : `
     <label>Placering
@@ -485,18 +508,19 @@ async function reloadRound() {
 // ---------- spelare ----------
 function viewPlayers() {
   const lv = S.state.settings.levels;
-  const ps = [...S.state.players].sort((a, b) => (a.active === false) - (b.active === false) || a.name.localeCompare(b.name, 'sv'));
+  const ps = [...S.state.players].sort((a, b) => (a.active === false) - (b.active === false) || res(a) - res(b) || a.name.localeCompare(b.name, 'sv'));
   const active = ps.filter((p) => p.active !== false);
   const pv = S.importPreview;
   app.innerHTML = `
   <section class="panel">
-    <h2>Spelare <span class="small muted">${active.length} aktiva · ${active.filter((p) => p.canGoalie).length} kan stå i mål</span></h2>
+    <h2>Spelare <span class="small muted">${active.filter((p) => !isReserve(p)).length} ordinarie · ${active.filter(isReserve).length} reserver · ${active.filter((p) => p.canGoalie).length} kan stå i mål</span></h2>
     <p class="small dist">${lv.map((l) => `<span><span class="ldot" style="--c:${l.color}"></span>${esc(l.name)} ${active.filter((p) => p.level === l.name).length}</span>`).join(' ')}</p>
-    <p class="small muted">Nivågruppen är intern och syns bara för inloggade ledare. Den har inget med lagens färger i matchschemat att göra.</p>
+    <p class="small muted">Nivågruppen är intern och syns bara för inloggade ledare. Den har inget med lagens färger i matchschemat att göra. <strong>Ordinarie</strong> tas ut först i förslagen, <strong>reserver</strong> fyller på när ordinarie inte räcker. Byt grupp när som helst; det påverkar bara kommande förslag.</p>
     <div class="tablewrap"><table class="players">
-      <thead><tr><th>Namn</th><th>Nivågrupp</th><th>Mål</th><th></th></tr></thead>
+      <thead><tr><th>Namn</th><th>Grupp</th><th>Nivågrupp</th><th>Mål</th><th></th></tr></thead>
       <tbody>${ps.map((p) => `<tr class="${p.active === false ? 'archived' : ''}">
         <td>${esc(p.name)}</td>
+        <td><select data-act="psquad" data-pid="${p.id}" class="${isReserve(p) ? 'isres' : ''}" aria-label="Grupp för ${esc(p.name)}"><option value="ordinarie" ${!isReserve(p) ? 'selected' : ''}>Ordinarie</option><option value="reserv" ${isReserve(p) ? 'selected' : ''}>Reserv</option></select></td>
         <td><select data-act="plevel" data-pid="${p.id}" aria-label="Nivågrupp för ${esc(p.name)}">${lv.map((l) => `<option ${l.name === p.level ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}</select></td>
         <td><input type="checkbox" data-act="pgoalie" data-pid="${p.id}" ${p.canGoalie ? 'checked' : ''} aria-label="${esc(p.name)} kan stå i mål"></td>
         <td><button class="linkbtn" data-act="parchive" data-pid="${p.id}" data-on="${p.active === false ? 1 : 0}">${p.active === false ? 'Återställ' : 'Arkivera'}</button></td>
@@ -504,14 +528,23 @@ function viewPlayers() {
     </table></div>
     <form id="addp" class="row wrapform">
       <input name="name" placeholder="Namn" required maxlength="60">
-      <select name="level">${lv.map((l) => `<option>${esc(l.name)}</option>`).join('')}</select>
+      <select name="squad" aria-label="Grupp"><option value="ordinarie">Ordinarie</option><option value="reserv">Reserv</option></select>
+      <select name="level" aria-label="Nivågrupp">${lv.map((l) => `<option>${esc(l.name)}</option>`).join('')}</select>
       <label class="check"><input type="checkbox" name="canGoalie"> Kan stå i mål</label>
       <button class="btn">Lägg till</button>
     </form>
   </section>
   <section class="panel">
+    <h2>Tränare</h2>
+    <p class="small muted">Tränarna väljs per lag i omgången och skrivs ut på laglistan (PDF).</p>
+    <ul class="users">${[...(S.state.coaches || [])].sort((a, b) => (a.active === false) - (b.active === false) || a.name.localeCompare(b.name, 'sv')).map((c) => `<li class="${c.active === false ? 'archived' : ''}">${esc(c.name)}
+      <button class="linkbtn" data-act="coachrename" data-id="${c.id}">byt namn</button>
+      <button class="linkbtn" data-act="coacharchive" data-id="${c.id}" data-on="${c.active === false ? 1 : 0}">${c.active === false ? 'återställ' : 'arkivera'}</button></li>`).join('') || '<li class="muted">Inga tränare ännu.</li>'}</ul>
+    <div class="row wrapform"><input id="newcoach" placeholder="Tränarens namn" maxlength="60"><button class="btn" data-act="addcoach">Lägg till tränare</button></div>
+  </section>
+  <section class="panel">
     <h2>Importera CSV</h2>
-    <p class="small">Tre kolumner med rubrikrad: <code>Namn;Nivågrupp;Kan stå i mål</code>. Nivågrupp är ${lv.map((l) => `<code>${esc(l.name)}</code>`).join(', ')}. Mål är <code>ja</code> eller <code>nej</code>. Semikolon, komma och tabb fungerar, så det går bra att spara direkt från Excel. Filen läses i din webbläsare och bara spelarna sparas.</p>
+    <p class="small">Kolumner med rubrikrad: <code>Namn;Nivågrupp;Kan stå i mål;Grupp</code>. Grupp är <code>ordinarie</code> eller <code>reserv</code> och kan utelämnas (då blir nya spelare ordinarie och befintliga behåller sin grupp). Nivågrupp är ${lv.map((l) => `<code>${esc(l.name)}</code>`).join(', ')}. Mål är <code>ja</code> eller <code>nej</code>. Semikolon, komma och tabb fungerar, så det går bra att spara direkt från Excel. Filen läses i din webbläsare och bara spelarna sparas.</p>
     <form id="imp" class="stack">
       <input type="file" name="file" accept=".csv,.txt,text/csv">
       <textarea name="csv" rows="5" placeholder="…eller klistra in här">${esc(pv?.csv || '')}</textarea>
@@ -525,7 +558,7 @@ function viewPlayers() {
     e.preventDefault();
     const f = e.target, name = f.name.value.trim();
     if (S.state.players.some((p) => p.active !== false && p.name.toLowerCase() === name.toLowerCase())) return toast('Det finns redan en spelare med det namnet.', true);
-    try { await B.addPlayer({ name, level: f.level.value, canGoalie: f.canGoalie.checked }); await refreshState(); viewPlayers(); toast('Spelaren är tillagd.'); }
+    try { await B.addPlayer({ name, level: f.level.value, canGoalie: f.canGoalie.checked, squad: f.squad.value }); await refreshState(); viewPlayers(); toast('Spelaren är tillagd.'); }
     catch (err) { toast(err.message, true); }
   };
   const imp = $('#imp');
@@ -543,7 +576,7 @@ function previewImport(csv, mode) {
   for (const p of players) {
     const e = existing.get(p.name.toLowerCase());
     if (!e) add.push(p);
-    else if (e.level !== p.level || e.canGoalie !== p.canGoalie || e.active === false) update.push({ ...p, id: e.id, from: { level: e.level, canGoalie: e.canGoalie } });
+    else if (e.level !== p.level || e.canGoalie !== p.canGoalie || e.active === false || (p.squad && p.squad !== (e.squad || 'ordinarie'))) update.push({ ...p, id: e.id, from: { level: e.level, canGoalie: e.canGoalie, squad: e.squad || 'ordinarie' } });
   }
   if (mode === 'replace') {
     const names = new Set(players.map((p) => p.name.toLowerCase()));
@@ -556,7 +589,7 @@ function importPreviewHtml(pv) {
     ${pv.errors.length ? `<div class="alert error"><strong>${pv.errors.length} rader behöver rättas</strong><ul>${pv.errors.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
     <p><strong>${pv.total}</strong> spelare i filen: ${pv.add.length} nya, ${pv.update.length} ändrade${pv.archive.length ? `, ${pv.archive.length} arkiveras` : ''}.</p>
     ${pv.add.length ? `<p class="small">Nya: ${pv.add.map((p) => esc(p.name)).join(', ')}</p>` : ''}
-    ${pv.update.length ? `<p class="small">Ändras: ${pv.update.map((p) => `${esc(p.name)} (${esc(p.from.level)} → ${esc(p.level)}${p.from.canGoalie !== p.canGoalie ? ', mål ' + (p.canGoalie ? 'ja' : 'nej') : ''})`).join(', ')}</p>` : ''}
+    ${pv.update.length ? `<p class="small">Ändras: ${pv.update.map((p) => `${esc(p.name)} (${esc(p.from.level)} → ${esc(p.level)}${p.from.canGoalie !== p.canGoalie ? ', mål ' + (p.canGoalie ? 'ja' : 'nej') : ''}${p.squad && p.squad !== p.from.squad ? ', ' + p.squad : ''})`).join(', ')}</p>` : ''}
     ${pv.archive.length ? `<p class="small">Arkiveras: ${pv.archive.map((p) => esc(p.name)).join(', ')}</p>` : ''}
     ${!pv.errors.length && (pv.add.length || pv.update.length || pv.archive.length) ? '<button class="btn primary" data-act="doimport">Importera</button>' : ''}
   </div>`;
@@ -678,6 +711,14 @@ async function viewLeaders() {
     </form>
   </section>
   <section class="panel">
+    <h2>Logga för laglistor</h2>
+    <img src="${esc(st.logo || 'logo.png')}" alt="Nuvarande logga" class="logopreview">
+    <p class="small muted">${st.logo ? 'En egen uppladdad logga används.' : 'Järfälla HC:s logga används som standard.'}</p>
+    <div class="row wrapform"><input type="file" id="logofile" accept="image/png,image/jpeg,image/svg+xml,image/webp">
+    ${st.logo ? '<button class="linkbtn danger" data-act="logoremove">ta bort loggan</button>' : ''}</div>
+    <p class="small muted">Vill ni byta logga kan ni ladda upp en annan fil (PNG eller SVG). Ta bort den uppladdade för att gå tillbaka till standardloggan.</p>
+  </section>
+  <section class="panel">
     <h2>Säkerhetskopia</h2>
     <p class="small">Gratisnivån i Supabase tar inga säkerhetskopior. Ladda ner en kopia ibland, till exempel efter varje fastställd omgång, och spara den på ett säkert ställe. Filen innehåller spelaruppgifter.</p>
     <button class="btn" data-act="backup">Ladda ner säkerhetskopia</button>
@@ -689,6 +730,15 @@ async function viewLeaders() {
   };
   if (!admin) return;
   $('#inv').onsubmit = async (e) => { e.preventDefault(); await makeInvite(e.target.email.value, e.target.role.value); };
+  $('#logofile').onchange = async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    try {
+      const logo = await readLogo(f);
+      await B.saveSettings({ ...S.state.settings, logo }, {});
+      await refreshState(); toast('Loggan är sparad.'); viewLeaders();
+    } catch (err) { toast(err.message, true); }
+  };
   $('#sets').onsubmit = async (e) => {
     e.preventDefault();
     const f = e.target;
@@ -703,11 +753,120 @@ async function viewLeaders() {
     catch (err) { toast(err.message, true); }
   };
 }
+async function readLogo(file) {
+  const dataUrl = await new Promise((ok, bad) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = () => bad(new Error('Kunde inte läsa filen.')); fr.readAsDataURL(file); });
+  if (file.type === 'image/svg+xml') { if (dataUrl.length > 300000) throw new Error('SVG-filen är för stor (max ca 200 kB).'); return dataUrl; }
+  const img = await new Promise((ok, bad) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => bad(new Error('Filen är ingen bild som går att läsa.')); i.src = dataUrl; });
+  const scale = Math.min(1, 500 / Math.max(img.width, img.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  const out = c.toDataURL('image/png');
+  if (out.length > 400000) throw new Error('Bilden är för stor. Prova en mindre fil.');
+  return out;
+}
 async function makeInvite(email, role = 'leader') {
   try {
     const r = await B.createInvite(email, role);
     $('#invlink').innerHTML = `<div class="alert ok"><div>Inbjudningslänk för <strong>${esc(r.email)}</strong>, gäller till ${fDT(r.expires)}:</div><input readonly value="${esc(r.link)}" class="mono" id="linkfield"><button class="btn" data-act="copylink">Kopiera länken</button></div>`;
   } catch (e) { toast(e.message, true); }
+}
+
+// ---------- reserver och tränare ----------
+function historyApps() {
+  const n = new Map();
+  for (const h of S.state.history) for (const t of h.teams) for (const id of [...t.goalies, ...t.lines.flat()]) n.set(id, (n.get(id) || 0) + 1);
+  return n;
+}
+function busyOnDate(pid, date) {
+  return S.round.keys.find((k) => U(k)?.date === date && [...S.round.teams[k].goalies, ...S.round.teams[k].lines.flat()].includes(pid));
+}
+function reserveDialog(key) {
+  const u = U(key), apps = historyApps();
+  const list = S.state.players.filter((p) => p.active !== false && isReserve(p) && isAvail(key, p.id) && !busyOnDate(p.id, u?.date))
+    .sort((a, b) => (apps.get(a.id) || 0) - (apps.get(b.id) || 0) || a.name.localeCompare(b.name, 'sv'));
+  const t = S.round.teams[key];
+  const dlg = $('#dlg');
+  dlg.innerHTML = `
+  <form method="dialog" class="stack">
+    <h2>Lägg till reserv</h2>
+    <p class="small">${esc(u?.label)} · ${fDate(u?.date)}</p>
+    ${list.length ? `
+    <label>Reserv <span class="small muted">(färst spelade poolspel överst)</span>
+      <select name="pid">${list.map((p) => `<option value="${p.id}">${esc(p.name)}${p.canGoalie ? ' (MV)' : ''} – ${apps.get(p.id) || 0} poolspel</option>`).join('')}</select>
+    </label>
+    <label>Roll
+      <select name="role"><option value="S">Utespelare${t.lines.length ? ` (kedja ${t.lines.length})` : ''}</option><option value="SN">Utespelare, ny kedja</option><option value="G">Målvakt</option></select>
+    </label>
+    <p class="small muted">Reserven låses i laget så att den ligger kvar om ni skapar ett nytt förslag.</p>` : '<p>Det finns ingen ledig reserv som kan det här poolspelet. Markera spelare som reserv under Spelare, eller kontrollera tillgängligheten.</p>'}
+    <div class="row">${list.length ? '<button class="btn primary" value="save">Lägg till</button>' : ''}<button class="btn" value="cancel" formnovalidate>Avbryt</button></div>
+  </form>`;
+  dlg.showModal();
+  dlg.onclose = async () => {
+    if (dlg.returnValue !== 'save') return;
+    const f = dlg.querySelector('form');
+    const role = f.role.value;
+    await act('move', { pid: f.pid.value, fromKey: null, toKey: key, role: role === 'G' ? 'G' : 'S', line: role === 'S' && t.lines.length ? t.lines.length - 1 : null, lock: true });
+  };
+}
+function coachDialog(key) {
+  const u = U(key), t = S.round.teams[key];
+  const chosen = new Set(t.coaches || []);
+  const elsewhere = (cid) => S.round.keys.filter((k) => k !== key && U(k)?.date === u?.date && (S.round.teams[k].coaches || []).includes(cid)).map((k) => U(k)?.label);
+  const list = (S.state.coaches || []).filter((c) => c.active !== false || chosen.has(c.id)).sort((a, b) => a.name.localeCompare(b.name, 'sv'));
+  const dlg = $('#dlg');
+  dlg.innerHTML = `
+  <form method="dialog" class="stack">
+    <h2>Tränare</h2>
+    <p class="small">${esc(u?.label)} · ${fDate(u?.date)}</p>
+    ${list.length ? list.map((c) => { const o = elsewhere(c.id); return `<label class="check"><input type="checkbox" name="c" value="${c.id}" ${chosen.has(c.id) ? 'checked' : ''}> ${esc(c.name)}${o.length ? ` <span class="small muted">(vald i ${esc(o.join(', '))} samma dag)</span>` : ''}</label>`; }).join('')
+      : '<p>Inga tränare finns ännu. Lägg till dem under <strong>Spelare → Tränare</strong>.</p>'}
+    <div class="row">${list.length ? '<button class="btn primary" value="save">Spara</button>' : ''}<button class="btn" value="cancel" formnovalidate>Avbryt</button></div>
+  </form>`;
+  dlg.showModal();
+  dlg.onclose = async () => {
+    if (dlg.returnValue !== 'save') return;
+    const ids = [...dlg.querySelectorAll('input[name=c]:checked')].map((x) => x.value);
+    if (S.round.status === 'fastställt') { toast('Öppna omgången som utkast för att ändra tränare.', true); return; }
+    await act('setCoaches', { key, ids });
+  };
+}
+
+// ---------- utskrift / PDF ----------
+async function viewPrint(roundId, onlyKey) {
+  const r = await B.getRound(roundId);
+  const keys = onlyKey ? [onlyKey] : r.keys;
+  const showInfo = localStorage.getItem('jhc-print-info') !== '0';
+  const logo = S.state.settings.logo || 'logo.png'; // klubbens logga följer med sidan; en uppladdad logga går före
+  const name = (id) => esc(P(id)?.name || '');
+  document.body.classList.add('printmode');
+  $('#top').hidden = true;
+  app.innerHTML = `
+  <div class="noprint printbar">
+    <a href="#/omgang/${r.id}" class="btn">← Tillbaka</a>
+    <button class="btn primary" data-act="print">Skriv ut / Spara som PDF</button>
+    <label class="check"><input type="checkbox" id="pinfo" ${showInfo ? 'checked' : ''}> Visa datum, hall och matchtider</label>
+    <p class="small muted">Välj <strong>Spara som PDF</strong> som skrivare i utskriftsrutan. På mobilen: Dela → Skriv ut, och nyp ut förhandsvisningen för att spara som PDF.</p>
+    ${r.status !== 'fastställt' ? '<p class="alert warn small">Omgången är inte fastställd ännu.</p>' : ''}
+  </div>
+  ${keys.map((k) => {
+    const t = r.teams[k] || { goalies: [], lines: [] }, u = U(k);
+    const sk = t.lines.flat();
+    return `<section class="sheet">
+      <header class="sheethead">
+        ${logo ? `<img src="${esc(logo)}" alt="Järfälla HC" class="logo">` : ''}
+        <div><h1>${esc(teamFullName(k))}</h1>
+        ${showInfo && u ? `<p class="sub">${esc(fDate(u.date))} · ${esc(u.venue)}${u.matches?.length ? ' · ' + u.matches.filter((m) => !m.missing).map((m) => esc(m.start || '')).filter(Boolean).join(', ') : ''}</p>` : ''}</div>
+      </header>
+      <h2>Målvakt</h2>
+      <ol>${t.goalies.map((id) => `<li>${name(id)}</li>`).join('') || '<li class="none">–</li>'}</ol>
+      <h2>Utespelare</h2>
+      <ol>${sk.map((id) => `<li>${name(id)}</li>`).join('') || '<li class="none">–</li>'}</ol>
+      <h2>Tränare</h2>
+      <ul>${(t.coaches || []).map((id) => `<li>${esc(C(id)?.name || '')}</li>`).join('') || '<li class="none">–</li>'}</ul>
+    </section>`;
+  }).join('')}`;
+  $('#pinfo').onchange = (e) => { localStorage.setItem('jhc-print-info', e.target.checked ? '1' : '0'); viewPrint(roundId, onlyKey); };
 }
 
 // ---------- klick ----------
@@ -745,6 +904,17 @@ document.addEventListener('click', async (e) => {
         toast(t.goalies.length ? 'Laglistan är kopierad.' : 'Laglistan är kopierad, men målvakt saknas.', !t.goalies.length);
         break;
       }
+      case 'addreserve': reserveDialog(d.key); break;
+      case 'coaches': coachDialog(d.key); break;
+      case 'print': window.print(); break;
+      case 'addcoach': {
+        const inp = $('#newcoach'); const name = inp.value.trim();
+        if (!name) return;
+        await B.addCoach(name); await refreshState(); viewPlayers(); toast('Tränaren är tillagd.'); break;
+      }
+      case 'coacharchive': await B.updateCoach(d.id, { active: d.on === '1' }); await refreshState(); viewPlayers(); break;
+      case 'coachrename': { const n = prompt('Nytt namn', C(d.id)?.name); if (n?.trim()) { await B.updateCoach(d.id, { name: n.trim().slice(0, 60) }); await refreshState(); viewPlayers(); } break; }
+      case 'logoremove': if (confirm('Ta bort loggan?')) { await B.saveSettings({ ...S.state.settings, logo: null }, {}); await refreshState(); viewLeaders(); } break;
       case 'copyall': await copyText(S.view.copy.all); toast('Laglistor för hela omgången är kopierade.'); break;
       case 'reload': $('#conflict').innerHTML = ''; S.pending = null; await refreshState(); await reloadRound(); break;
       case 'force': if (S.pending) { $('#conflict').innerHTML = ''; await act(S.pending.type, S.pending.extra, { force: true }); } break;
@@ -783,6 +953,7 @@ document.addEventListener('change', async (e) => {
   try {
     if (d.act === 'avail') await setAvail(d.key, d.pid, t.checked);
     if (d.act === 'plevel') { await B.updatePlayer(d.pid, { level: t.value }); await refreshState(); toast('Nivågruppen är ändrad.'); }
+    if (d.act === 'psquad') { await B.updatePlayer(d.pid, { squad: t.value }); await refreshState(); t.classList.toggle('isres', t.value === 'reserv'); toast(t.value === 'reserv' ? 'Spelaren är nu reserv.' : 'Spelaren är nu ordinarie.'); viewPlayers(); }
     if (d.act === 'pgoalie') { await B.updatePlayer(d.pid, { canGoalie: t.checked }); await refreshState(); }
   } catch (err) { toast(err.message, true); }
 });

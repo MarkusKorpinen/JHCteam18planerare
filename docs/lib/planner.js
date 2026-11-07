@@ -7,6 +7,7 @@
 
 export const RULES = [
   'Bara aktiva spelare som inte är markerade ”kan inte” för poolspelet tas ut.',
+  'Förslaget använder bara ordinarie spelare. Reserver läggs till manuellt av ledarna (knappen ”Lägg till reserv” på lagkortet). Låsta reserver ligger kvar vid nytt förslag.',
   'En spelare tas aldrig ut i två poolspel samma dag (tidskrock). Spelare kan inte heller tas ut fler gånger i omgången än inställningen ”Max poolspel per spelare”.',
   'Låsta placeringar läggs in först och flyttas aldrig av ett nytt förslag.',
   'Målvakter väljs bara bland spelare som kan stå i mål. Den som stått i mål minst antal gånger i fastställda lag går först.',
@@ -59,12 +60,14 @@ export function historyStats(history) {
 }
 
 const isAvailable = (availability, key, pid) => !(availability?.[key]?.[pid] === false);
+export const isReserve = (p) => p?.squad === 'reserv';
+const res = (p) => (isReserve(p) ? 1 : 0);
 
 // ---------- förslag ----------
 /**
  * @param {object} o
  * @param {Array<{key,date}>} o.uppdrag
- * @param {Array<{id,name,level,canGoalie,active}>} o.players
+ * @param {Array<{id,name,level,canGoalie,active,squad}>} o.players  squad: 'ordinarie' | 'reserv'
  * @param {object} o.availability  {key: {pid: false}}
  * @param {Array<{pid,key,role}>} o.locks
  * @param {object} o.settings     {skaters, goalies, lineSize, maxPerPlayer}
@@ -80,6 +83,7 @@ export function propose(o) {
   const stats = historyStats(o.history);
   const players = (o.players || []).filter((p) => p.active !== false);
   const byId = new Map(players.map((p) => [p.id, p]));
+  const pool = players.filter((p) => !isReserve(p)); // bara ordinarie föreslås
   const U = o.uppdrag.map((u) => ({ key: u.key, date: u.date, goalies: [], skaters: [] }));
   const uByKey = new Map(U.map((u) => [u.key, u]));
   const usedDates = new Map(); // pid -> Set(date)
@@ -112,12 +116,13 @@ export function propose(o) {
   for (;;) {
     const needing = U.filter((u) => u.goalies.length < s.goalies);
     if (!needing.length) break;
-    const cands = (u) => players.filter((p) => p.canGoalie && eligible(p.id, u));
+    const cands = (u) => pool.filter((p) => p.canGoalie && eligible(p.id, u));
     needing.sort((a, b) => cands(a).length - cands(b).length || a.key.localeCompare(b.key));
     const u = needing.find((x) => cands(x).length > 0);
     if (!u) break;
     const c = cands(u).map((p) => ({ p, r: rand() }));
     c.sort((a, b) =>
+      res(a.p) - res(b.p) ||
       (usedCount.get(a.p.id) || 0) - (usedCount.get(b.p.id) || 0) ||
       (stats.goalieApps.get(a.p.id) || 0) - (stats.goalieApps.get(b.p.id) || 0) ||
       a.r - b.r);
@@ -125,7 +130,8 @@ export function propose(o) {
   }
 
   // 3. Utespelare
-  const supplyIds = players.filter((p) => U.some((u) => eligible(p.id, u))).map((p) => p.id);
+  // Nivåmålen räknas på de spelare som troligen tas ut: bara ordinarie om de räcker till alla platser.
+  const supplyIds = pool.filter((p) => U.some((u) => eligible(p.id, u))).map((p) => p.id);
   const levelShare = {};
   for (const pid of supplyIds) { const l = byId.get(pid).level; levelShare[l] = (levelShare[l] || 0) + 1; }
   const supplyTotal = supplyIds.length || 1;
@@ -137,12 +143,13 @@ export function propose(o) {
     const open = U.filter((u) => u.skaters.length < s.skaters);
     if (!open.length) break;
     const options = new Map();
-    for (const p of players) {
+    for (const p of pool) {
       const opts = open.filter((u) => eligible(p.id, u));
       if (opts.length) options.set(p.id, opts);
     }
     if (!options.size) break;
     const order = [...options.keys()].sort((a, b) =>
+      res(byId.get(a)) - res(byId.get(b)) ||
       (usedCount.get(a) || 0) - (usedCount.get(b) || 0) ||
       options.get(a).length - options.get(b).length ||
       (stats.apps.get(a) || 0) - (stats.apps.get(b) || 0) ||
@@ -228,7 +235,7 @@ export function buildLines(skaters, lineSize, byId, rank, stats, rand) {
 }
 
 // ---------- kontroller ----------
-export function validate({ round, uppdragMap, players, availability, levels }) {
+export function validate({ round, uppdragMap, players, availability, levels, coaches = [] }) {
   const s = { ...DEFAULT_ROUND_SETTINGS, ...(round.settings || {}) };
   const byId = new Map(players.map((p) => [p.id, p]));
   const name = (id) => byId.get(id)?.name || 'Okänd spelare';
@@ -245,7 +252,7 @@ export function validate({ round, uppdragMap, players, availability, levels }) {
     else if (u.matches?.some((m) => m.missing)) w.push({ level: 'warn', text: 'En eller flera matcher saknas i källan.' });
     if ((t.goalies || []).length < s.goalies)
       w.push({ level: 'error', text: s.goalies - (t.goalies || []).length === 1 ? 'Målvakt saknas.' : `${s.goalies - t.goalies.length} målvakter saknas.` });
-    if (skaters.length < s.skaters) w.push({ level: 'error', text: `${s.skaters - skaters.length} utespelare saknas (${skaters.length} av ${s.skaters}).` });
+    if (skaters.length < s.skaters) w.push({ level: 'error', text: `${s.skaters - skaters.length} utespelare saknas (${skaters.length} av ${s.skaters}). Lägg till reserver.` });
     if (skaters.length > s.skaters) w.push({ level: 'info', text: `${skaters.length - s.skaters} fler utespelare än önskat.` });
     for (const g of t.goalies || []) if (byId.has(g) && !byId.get(g).canGoalie) w.push({ level: 'warn', text: `${name(g)} är inte markerad som målvakt.` });
     for (const pid of [...(t.goalies || []), ...skaters]) {
@@ -257,6 +264,7 @@ export function validate({ round, uppdragMap, players, availability, levels }) {
       placements.get(pid).push({ key, date: u?.date });
     }
     for (const r of t.review || []) if (!r.ack) w.push({ level: 'review', text: `Schemat har ändrats: ${r.items.join('; ')}` });
+    if (!(t.coaches || []).length) w.push({ level: 'info', text: 'Ingen tränare vald.' });
     perTeam[key] = w;
   }
   for (const [pid, list] of placements) {
@@ -266,7 +274,21 @@ export function validate({ round, uppdragMap, players, availability, levels }) {
       perTeam[k].push({ level: 'error', text: `${name(pid)} är uttagen i ${keys.length} poolspel samma dag.` });
     if (list.length > s.maxPerPlayer) global.push({ level: 'warn', text: `${name(pid)} är uttagen ${list.length} gånger (max ${s.maxPerPlayer}).` });
   }
+  // Tränare i två poolspel samma dag
+  const coachName = (id) => coaches.find((c) => c.id === id)?.name || 'Okänd tränare';
+  const coachDates = new Map();
+  for (const key of round.keys) for (const cid of round.teams?.[key]?.coaches || []) {
+    const k2 = `${cid}|${uppdragMap[key]?.date}`;
+    if (!coachDates.has(k2)) coachDates.set(k2, []);
+    coachDates.get(k2).push(key);
+  }
+  for (const [k2, keys] of coachDates) if (keys.length > 1) for (const k of keys)
+    perTeam[k].push({ level: 'warn', text: `Tränaren ${coachName(k2.split('|')[0])} är vald i ${keys.length} poolspel samma dag.` });
   const unplaced = players.filter((p) => p.active !== false && !placements.has(p.id) && round.keys.some((k) => isAvailable(availability, k, p.id)));
+  const ordOut = unplaced.filter((p) => !isReserve(p));
+  const reservesIn = [...placements.keys()].filter((id) => isReserve(byId.get(id)));
+  if (ordOut.length && reservesIn.length)
+    global.push({ level: 'warn', text: `Reserver är uttagna fast ${ordOut.length === 1 ? 'en ordinarie spelare kan' : ordOut.length + ' ordinarie spelare kan'}: ${ordOut.map((p) => p.name).join(', ')}.` });
   const levelDist = {};
   for (const key of round.keys) {
     const sk = (round.teams?.[key]?.lines || []).flat();

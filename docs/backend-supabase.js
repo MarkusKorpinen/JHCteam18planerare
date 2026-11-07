@@ -70,7 +70,7 @@ export function createSupabaseBackend({ url, anonKey }) {
   const rpc = (fn, args) => rest('POST', `rpc/${fn}`, args || {});
   const uid = () => session?.user?.id;
 
-  const mapPlayer = (p) => ({ id: p.id, name: p.name, level: p.level, canGoalie: p.can_goalie, active: p.active });
+  const mapPlayer = (p) => ({ id: p.id, name: p.name, level: p.level, canGoalie: p.can_goalie, active: p.active, squad: p.squad || 'ordinarie' });
   const mapRound = (r) => ({
     ...(r.data || {}), id: r.id, name: r.name, status: r.status, version: r.version,
     createdAt: r.created_at, createdByName: r.created_by_name, updatedAt: r.updated_at, updatedBy: r.updated_by,
@@ -111,7 +111,7 @@ export function createSupabaseBackend({ url, anonKey }) {
       return this.me();
     },
     async loadState() {
-      const [settings, players, avail, schedule, changes, rounds, history] = await Promise.all([
+      const [settings, players, avail, schedule, changes, rounds, history, coaches] = await Promise.all([
         rest('GET', 'settings?select=data&id=eq.1'),
         rest('GET', 'players?select=*&order=name'),
         rest('GET', 'availability?select=uppdrag_key,player_id'),
@@ -119,18 +119,19 @@ export function createSupabaseBackend({ url, anonKey }) {
         rest('GET', 'schedule_changes?select=*&order=at.desc&limit=300'),
         rest('GET', 'rounds?select=id,name,status,version,created_at,updated_at,updated_by_name,confirmed_at,keys:data->keys&order=created_at.desc'),
         rest('GET', 'history?select=*&order=confirmed_at'),
+        rest('GET', 'coaches?select=id,name,active&order=name'),
       ]);
       const availability = {};
       for (const a of avail) (availability[a.uppdrag_key] ||= {})[a.player_id] = false;
       return {
-        settings: settings[0]?.data, players: players.map(mapPlayer), availability,
+        settings: settings[0]?.data, players: players.map(mapPlayer), availability, coaches,
         schedule: schedule[0] || { uppdrag: {} }, changes,
         rounds: rounds.map((r) => ({ id: r.id, name: r.name, status: r.status, keys: r.keys || [], createdAt: r.created_at, updatedAt: r.updated_at, updatedByName: r.updated_by_name, confirmedAt: r.confirmed_at })),
         history: history.map((h) => ({ roundId: h.round_id, roundName: h.round_name, confirmedAt: h.confirmed_at, teams: h.data.teams || [] })),
       };
     },
     async addPlayer(p) {
-      const [row] = await rest('POST', 'players', { name: p.name, level: p.level, can_goalie: !!p.canGoalie }, 'return=representation');
+      const [row] = await rest('POST', 'players', { name: p.name, level: p.level, can_goalie: !!p.canGoalie, squad: p.squad === 'reserv' ? 'reserv' : 'ordinarie' }, 'return=representation');
       return mapPlayer(row);
     },
     async updatePlayer(id, patch) {
@@ -139,13 +140,16 @@ export function createSupabaseBackend({ url, anonKey }) {
       if (patch.level !== undefined) body.level = patch.level;
       if (patch.canGoalie !== undefined) body.can_goalie = patch.canGoalie;
       if (patch.active !== undefined) body.active = patch.active;
+      if (patch.squad !== undefined) body.squad = patch.squad === 'reserv' ? 'reserv' : 'ordinarie';
       await rest('PATCH', `players?id=eq.${id}`, body);
     },
     async importPlayers({ add, update, archive }) {
-      if (add.length) await rest('POST', 'players', add.map((p) => ({ name: p.name, level: p.level, can_goalie: p.canGoalie })));
-      for (const p of update) await this.updatePlayer(p.id, { level: p.level, canGoalie: p.canGoalie, active: true });
+      if (add.length) await rest('POST', 'players', add.map((p) => ({ name: p.name, level: p.level, can_goalie: p.canGoalie, squad: p.squad === 'reserv' ? 'reserv' : 'ordinarie' })));
+      for (const p of update) await this.updatePlayer(p.id, { level: p.level, canGoalie: p.canGoalie, active: true, ...(p.squad ? { squad: p.squad } : {}) });
       if (archive.length) await rest('PATCH', `players?id=in.(${archive.map((a) => a.id).join(',')})`, { active: false });
     },
+    async addCoach(name) { const [row] = await rest('POST', 'coaches', { name }, 'return=representation'); return row; },
+    updateCoach: (id, patch) => rest('PATCH', `coaches?id=eq.${id}`, patch),
     async setAvailability(key, pid, available) {
       if (available) await rest('DELETE', `availability?uppdrag_key=eq.${encodeURIComponent(key)}&player_id=eq.${pid}`);
       else await rest('POST', 'availability', { uppdrag_key: key, player_id: pid }, 'resolution=ignore-duplicates');
@@ -203,7 +207,7 @@ export function createSupabaseBackend({ url, anonKey }) {
     setMyName: (name) => rpc('set_my_name', { p_name: name }),
     saveSettings: (data, rename) => rpc('save_settings', { p_data: data, p_rename: rename || {} }),
     async exportAll() {
-      const tables = ['settings', 'players', 'availability', 'schedule', 'schedule_changes', 'rounds', 'history', 'comments', 'leaders'];
+      const tables = ['settings', 'players', 'coaches', 'availability', 'schedule', 'schedule_changes', 'rounds', 'history', 'comments', 'leaders'];
       const out = { exportedAt: new Date().toISOString() };
       for (const t of tables) out[t] = await rest('GET', `${t}?select=*`);
       return out;

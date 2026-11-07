@@ -142,3 +142,32 @@ dialog select { width: 100%; }
 }
 #pform p { margin: 0; }
 .demobar { background: #f2c200; color: #1b1f24; font-size: .85rem; font-weight: 600; text-align: center; padding: 4px 10px; }
+.res { font-size: .62rem; font-weight: 800; background: #fff1d6; color: #8a5300; border-radius: 4px; padding: 1px 4px; margin-left: 5px; }
+.resn { color: #8a5300; }
+select.isres { background: #fff6e3; }
+.coach { display: inline-flex; align-items: center; border: 1px dashed #b8c0cc; border-radius: 99px; padding: 5px 11px; font-size: .9rem; }
+li.archived { color: var(--muted); text-decoration: line-through; }
+.logopreview { max-height: 90px; max-width: 220px; display: block; margin-bottom: 8px; }
+
+/* Laglista / PDF */
+html:has(body.printmode), body.printmode { background: #fff; }
+.printbar { background: #f4f6f9; border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; margin-bottom: 16px; }
+.printbar .row, .printbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.printbar p { flex-basis: 100%; margin: 2px 0; }
+.sheet { background: #fff; color: #000; max-width: 720px; margin: 0 auto 28px; padding: 28px 32px; border: 1px solid var(--line); border-radius: 8px; font-size: 15pt; }
+.sheethead { display: flex; align-items: center; gap: 22px; border-bottom: 2px solid #000; padding-bottom: 14px; margin-bottom: 8px; }
+.sheethead .logo { height: 90px; width: auto; max-width: 160px; object-fit: contain; }
+.sheethead h1 { font-size: 24pt; margin: 0; }
+.sheethead .sub { margin: 4px 0 0; font-size: 12pt; }
+.sheet h2 { font-size: 13pt; text-transform: uppercase; letter-spacing: .06em; margin: 18px 0 6px; border-bottom: 1px solid #999; padding-bottom: 3px; }
+.sheet ol, .sheet ul { margin: 0; padding-left: 1.6em; line-height: 1.6; }
+.sheet li.none { list-style: none; margin-left: -1.6em; color: #666; }
+@media print {
+  @page { size: A4; margin: 15mm; }
+  body, html:has(body.printmode), body.printmode { background: #fff; }
+  .top, .noprint, #toast, dialog { display: none !important; }
+  main { padding: 0 !important; max-width: none; }
+  .sheet { border: 0; border-radius: 0; padding: 0; margin: 0; max-width: none; break-after: page; page-break-after: always; }
+  .sheet:last-child { break-after: auto; page-break-after: auto; }
+}
+a.btn { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }

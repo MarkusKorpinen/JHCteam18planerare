@@ -1,7 +1,7 @@
 // Ändringar på en omgång. Körs i webbläsaren; databasen kontrollerar versionen när de sparas.
 // En omgång: { id, name, status, version, keys, settings, teams: {key: {goalies, lines}}, locks, log, lastSeed }
 // ctx: { uppdrag, players, availability, levels, history, teamPrefix, me }
-import { propose, validate, rosterText, DEFAULT_ROUND_SETTINGS } from './planner.js';
+import { propose, validate, rosterText, DEFAULT_ROUND_SETTINGS, isReserve } from './planner.js';
 
 const fail = (msg) => { throw new Error(msg); };
 export const emptyTeam = () => ({ goalies: [], lines: [] });
@@ -42,7 +42,7 @@ export const ACTIONS = {
       players: ctx.players, availability: ctx.availability, locks: r.locks, settings: r.settings,
       levels: ctx.levels, history: (ctx.history || []).filter((h) => h.roundId !== r.id), seed,
     });
-    for (const k of r.keys) r.teams[k] = { goalies: res.teams[k].goalies, lines: res.teams[k].lines };
+    for (const k of r.keys) r.teams[k] = { ...(r.teams[k] || {}), goalies: res.teams[k].goalies, lines: res.teams[k].lines };
     r.lastSeed = seed;
     return 'skapade ett nytt förslag';
   },
@@ -58,7 +58,9 @@ export const ACTIONS = {
       else if (Number.isInteger(b.line) && b.line >= 0 && b.line < t.lines.length) t.lines[b.line].push(b.pid);
       else t.lines.push([b.pid]);
       if (lock) { lock.key = b.toKey; lock.role = b.role === 'G' ? 'G' : 'S'; }
-      if (b.lock) { r.locks = r.locks.filter((l) => !(l.pid === b.pid && l.key === b.toKey)); r.locks.push({ pid: b.pid, key: b.toKey, role: b.role === 'G' ? 'G' : 'S' }); }
+      // Reserver föreslås aldrig automatiskt, så en manuellt tillagd reserv låses för att ligga kvar vid nytt förslag.
+      const wantLock = b.lock || isReserve(ctx.players.find((p) => p.id === b.pid));
+      if (wantLock) { r.locks = r.locks.filter((l) => !(l.pid === b.pid && l.key === b.toKey)); r.locks.push({ pid: b.pid, key: b.toKey, role: b.role === 'G' ? 'G' : 'S' }); }
       r.locks = r.locks.filter((l, i, a) => a.findIndex((x) => x.pid === l.pid && x.key === l.key) === i);
     } else if (lock) r.locks = r.locks.filter((l) => l !== lock);
     return `flyttade ${name} till ${b.toKey ? `${label(ctx, b.toKey)} (${b.role === 'G' ? 'målvakt' : 'utespelare'})` : 'ej uttagna'}`;
@@ -88,6 +90,13 @@ export const ACTIONS = {
     r.keys = sortKeys(keys, ctx.uppdrag);
     return 'ändrade vilka poolspel som ingår';
   },
+  setCoaches(r, b, ctx) {
+    const t = r.teams[b.key] || fail('Okänt lag.');
+    const ids = [...new Set(b.ids || [])];
+    t.coaches = ids;
+    const names = ids.map((id) => (ctx.coaches || []).find((c) => c.id === id)?.name).filter(Boolean);
+    return `valde tränare för ${label(ctx, b.key)}: ${names.join(', ') || 'inga'}`;
+  },
   rename(r, b) {
     const name = String(b.name || '').trim().slice(0, 80) || fail('Namnet är tomt.');
     r.name = name;
@@ -104,7 +113,7 @@ export const teamName = (ctx, key) => `${ctx.teamPrefix || ''} ${ctx.uppdrag[key
 export function snapshot(r, ctx) {
   return {
     roundId: r.id, roundName: r.name,
-    teams: r.keys.map((k) => ({ key: k, date: ctx.uppdrag[k]?.date, label: ctx.uppdrag[k]?.label, goalies: [...(r.teams[k]?.goalies || [])], lines: (r.teams[k]?.lines || []).map((l) => [...l]) })),
+    teams: r.keys.map((k) => ({ key: k, date: ctx.uppdrag[k]?.date, label: ctx.uppdrag[k]?.label, goalies: [...(r.teams[k]?.goalies || [])], lines: (r.teams[k]?.lines || []).map((l) => [...l]), coaches: [...(r.teams[k]?.coaches || [])] })),
   };
 }
 
@@ -115,7 +124,7 @@ export function pendingReview(r, key, changes) {
 
 export function view(r, ctx) {
   const withReview = { ...r, teams: Object.fromEntries(r.keys.map((k) => [k, { ...(r.teams[k] || emptyTeam()), review: pendingReview(r, k, ctx.changes).map((c) => ({ at: c.at, items: c.items, ack: false })) }])) };
-  const validation = validate({ round: withReview, uppdragMap: ctx.uppdrag, players: ctx.players, availability: ctx.availability, levels: ctx.levels });
+  const validation = validate({ round: withReview, uppdragMap: ctx.uppdrag, players: ctx.players, availability: ctx.availability, levels: ctx.levels, coaches: ctx.coaches || [] });
   const copy = {};
   for (const k of r.keys) copy[k] = rosterText(teamName(ctx, k), r.teams[k], ctx.players);
   copy.all = r.keys.map((k) => copy[k]).join('\n\n\n');

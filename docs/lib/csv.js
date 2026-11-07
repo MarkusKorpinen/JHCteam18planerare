@@ -30,12 +30,15 @@ export function playersFromCsv(text, levelNames) {
   const rows = parseCsv(text);
   const errors = [], players = [];
   if (!rows.length) return { players, errors: ['Filen är tom.'] };
-  let idx = { name: 0, level: 1, goalie: 2 };
+  let idx = { name: 0, level: 1, goalie: 2, squad: 3 };
   let start = 0;
   const h = rows[0].map(norm);
   if (h.some((x) => ['namn', 'name', 'spelare'].includes(x))) {
     const find = (...keys) => h.findIndex((x) => keys.some((k) => x.includes(k)));
-    idx = { name: find('namn', 'name', 'spelare'), level: find('niva', 'grupp', 'level'), goalie: find('mal', 'goal', 'mv') };
+    let squadIdx = find('ordinarie', 'reserv', 'trupp', 'roll', 'status');
+    if (squadIdx < 0) squadIdx = h.findIndex((x) => x === 'grupp' || x === 'spelargrupp');
+    idx = { name: find('namn', 'name', 'spelare'), level: find('niva', 'level', 'nivagrupp'), goalie: find('mal', 'goal', 'mv'), squad: squadIdx };
+    if (idx.level < 0) idx.level = h.findIndex((x, i) => x.includes('grupp') && i !== squadIdx);
     start = 1;
     if (idx.name < 0 || idx.level < 0) return { players, errors: ['Hittar inte kolumnerna för namn och nivågrupp i rubrikraden.'] };
   }
@@ -52,7 +55,11 @@ export function playersFromCsv(text, levelNames) {
     const k = name.toLowerCase();
     if (seen.has(k)) { errors.push(`Rad ${line}: ${name} finns redan i filen.`); continue; }
     seen.add(k);
-    players.push({ name, level, canGoalie: YES.has(g) });
+    const sq = idx.squad >= 0 ? norm(r[idx.squad] || '') : '';
+    if (sq && !['ordinarie', 'ord', 'o', 'reserv', 'r', 'res'].includes(sq)) { errors.push(`Rad ${line} (${name}): förstår inte gruppen ”${r[idx.squad]}”. Använd ordinarie eller reserv.`); continue; }
+    const p = { name, level, canGoalie: YES.has(g) };
+    if (idx.squad >= 0 && r.length > idx.squad) p.squad = ['reserv', 'r', 'res'].includes(sq) ? 'reserv' : 'ordinarie';
+    players.push(p);
   }
   return { players, errors };
 }

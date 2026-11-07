@@ -3,15 +3,15 @@ import { playersFromCsv } from './lib/csv.js';
 import { runSync } from './lib/schedule.js';
 import { newRound, ACTIONS, addLog, snapshot } from './lib/rounds.js';
 
-const KEY = 'jhc-planerare-demo';
+const KEY = 'jhc-planerare-demo-4';
 const FIRST = ['Alva', 'Bo', 'Cleo', 'Dante', 'Ebbe', 'Freja', 'Gustav', 'Hedda', 'Isak', 'Juni', 'Kasper', 'Lova', 'Malte', 'Nova', 'Otto', 'Penny', 'Rasmus', 'Saga', 'Tage', 'Ugo', 'Vera', 'Wilmer', 'Ylva', 'Ziggy', 'Alvin', 'Bianca', 'Colin', 'Disa', 'Elton', 'Fanny', 'Gry', 'Hjalmar', 'Ines', 'Jack', 'Kim', 'Leon', 'Majken', 'Nils', 'Olle', 'Pim', 'Rut', 'Sigge'];
 const LAST = ['Ahl', 'Berg', 'Dahl', 'Ek', 'Falk', 'Grahn', 'Holm', 'Lind', 'Mårs', 'Nord', 'Ros', 'Sjö', 'Tall', 'Udd', 'Wik'];
 export function fakeCsv(n = 42) {
   const lv = ['Grön', 'Orange', 'Lila'];
-  const rows = ['Namn;Nivågrupp;Kan stå i mål'];
+  const rows = ['Namn;Nivågrupp;Kan stå i mål;Grupp'];
   for (let i = 0; i < n; i++) {
     const level = lv[i % 10 < 3 ? 0 : i % 10 < 7 ? 1 : 2];
-    rows.push(`${FIRST[i % FIRST.length]} ${LAST[(i * 7) % LAST.length]};${level};${[2, 9, 15, 21, 27, 33, 38, 40].includes(i) ? 'ja' : 'nej'}`);
+    rows.push(`${FIRST[i % FIRST.length]} ${LAST[(i * 7) % LAST.length]};${level};${[2, 9, 15, 21, 27, 33, 38, 40].includes(i) ? 'ja' : 'nej'};${i >= 32 ? 'reserv' : 'ordinarie'}`);
   }
   return rows.join('\n');
 }
@@ -26,7 +26,7 @@ export function createDemoBackend({ source = 'demo/schedule.json' } = {}) {
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch {} };
   const ctxFor = () => ({
     uppdrag: db.schedule.uppdrag, players: db.players, availability: availMap(), levels: db.settings.levels.map((l) => l.name),
-    history: db.history, teamPrefix: db.settings.teamPrefix, me: ME, changes: db.changes,
+    history: db.history, teamPrefix: db.settings.teamPrefix, me: ME, changes: db.changes, coaches: db.coaches || [],
   });
   const availMap = () => { const a = {}; for (const x of db.availability) (a[x.key] ||= {})[x.pid] = false; return a; };
   const stamp = (r, text) => { r.version = (r.version || 0) + 1; r.updatedAt = now(); r.updatedByName = ME.name; if (text) addLog(r, ME, text); };
@@ -41,10 +41,12 @@ export function createDemoBackend({ source = 'demo/schedule.json' } = {}) {
     syncFailed: async (error, trigger) => { Object.assign(db.schedule, { last_attempt: now(), last_error: error, last_trigger: trigger }); save(); },
   };
 
+  const demoCoaches = (r) => r.keys.forEach((k, i) => { r.teams[k].coaches = [db.coaches[i % 6].id, ...(i + 4 < 6 ? [db.coaches[i + 4].id] : [])]; });
   async function seed() {
     db = {
       settings: { levels: [{ name: 'Grön', color: '#2e9e5b' }, { name: 'Orange', color: '#e8862a' }, { name: 'Lila', color: '#8a55c9' }], teamPrefix: 'Järfälla HC', syncHours: 24, roundDefaults: { skaters: 7, goalies: 1, lineSize: 4, maxPerPlayer: 1 } },
       players: playersFromCsv(fakeCsv(), ['Grön', 'Orange', 'Lila']).players.map((p) => ({ id: uuid(), ...p, active: true })),
+      coaches: ['Anna Andersson', 'Bertil Berg', 'Cecilia Carlsson', 'David Dahl', 'Eva Ek', 'Fredrik Falk'].map((name) => ({ id: uuid(), name, active: true })),
       availability: [], schedule: { uppdrag: {} }, changes: [], rounds: [], history: [], comments: [],
     };
     await runSync(syncApi, { source, trigger: 'demo' });
@@ -54,6 +56,7 @@ export function createDemoBackend({ source = 'demo/schedule.json' } = {}) {
       const keys = dates.flatMap(on);
       if (!keys.length) continue;
       const r = { ...newRound(name, keys, db.settings.roundDefaults, ctxFor()), id: uuid(), createdAt: now(), version: 0 };
+      demoCoaches(r);
       r.status = 'fastställt'; r.confirmedAt = now(); r.confirmedBy = ME.name; stamp(r, 'fastställde omgången');
       db.rounds.unshift(r);
       db.history.push({ ...snapshot(r, ctxFor()), confirmedAt: r.confirmedAt });
@@ -63,6 +66,7 @@ export function createDemoBackend({ source = 'demo/schedule.json' } = {}) {
       for (const i of [0, 5, 11]) db.availability.push({ key: keys[0], pid: db.players[i].id });
       for (const k of keys) db.availability.push({ key: k, pid: db.players[2].id });
       const r = { ...newRound('Omgång 28 nov', keys, db.settings.roundDefaults, ctxFor()), id: uuid(), createdAt: now(), version: 0 };
+      demoCoaches(r);
       stamp(r);
       db.rounds.unshift(r);
       db.comments.push({ id: uuid(), roundId: r.id, key: keys[0], userId: 'leo', name: 'Leo Ledare', text: 'Bra om Vera får spela med Otto den här gången.', at: now() });
@@ -78,20 +82,22 @@ export function createDemoBackend({ source = 'demo/schedule.json' } = {}) {
     async logout() {},
     async loadState() {
       return {
-        settings: clone(db.settings), players: clone(db.players), availability: availMap(), schedule: clone(db.schedule),
+        settings: clone(db.settings), players: clone(db.players), coaches: clone(db.coaches || []), availability: availMap(), schedule: clone(db.schedule),
         changes: clone(db.changes),
         rounds: db.rounds.map((r) => ({ id: r.id, name: r.name, status: r.status, keys: r.keys, createdAt: r.createdAt, updatedAt: r.updatedAt, updatedByName: r.updatedByName, confirmedAt: r.confirmedAt })),
         history: clone(db.history),
       };
     },
-    async addPlayer(p) { const x = { id: uuid(), name: p.name, level: p.level, canGoalie: !!p.canGoalie, active: true }; db.players.push(x); save(); return x; },
+    async addPlayer(p) { const x = { id: uuid(), name: p.name, level: p.level, canGoalie: !!p.canGoalie, squad: p.squad === 'reserv' ? 'reserv' : 'ordinarie', active: true }; db.players.push(x); save(); return x; },
     async updatePlayer(id, patch) { Object.assign(db.players.find((p) => p.id === id), patch); save(); },
     async importPlayers({ add, update, archive }) {
-      for (const p of add) db.players.push({ id: uuid(), ...p, active: true });
-      for (const p of update) Object.assign(db.players.find((x) => x.id === p.id), { level: p.level, canGoalie: p.canGoalie, active: true });
+      for (const p of add) db.players.push({ id: uuid(), squad: 'ordinarie', ...p, active: true });
+      for (const p of update) Object.assign(db.players.find((x) => x.id === p.id), { level: p.level, canGoalie: p.canGoalie, active: true, ...(p.squad ? { squad: p.squad } : {}) });
       for (const a of archive) db.players.find((x) => x.id === a.id).active = false;
       save();
     },
+    async addCoach(name) { const c = { id: uuid(), name, active: true }; (db.coaches ||= []).push(c); save(); return c; },
+    async updateCoach(id, patch) { Object.assign(db.coaches.find((c) => c.id === id), patch); save(); },
     async setAvailability(key, pid, available) {
       db.availability = db.availability.filter((a) => !(a.key === key && a.pid === pid));
       if (!available) db.availability.push({ key, pid });
