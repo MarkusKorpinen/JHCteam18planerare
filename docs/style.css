@@ -316,3 +316,6 @@ fieldset { min-width: 0; }
 .cerow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .cebtns { display: flex; gap: 6px; }
 .dangerzone { border-color: #f0b4bc; }
+
+.who .viewas { font: inherit; font-size: .78rem; padding: 1px 4px; border-radius: 6px; max-width: 150px; }
+.demobar .btn.small { margin-left: 8px; padding: 2px 8px; }

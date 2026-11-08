@@ -1,14 +1,14 @@
 // Järfälla HC Team 2018 – gränssnitt. Koden innehåller ingen spelardata; den hämtas efter inloggning.
-import { CONFIG } from './config.js';
-import { createSupabaseBackend } from './backend-supabase.js';
-import { createDemoBackend } from './backend-demo.js';
-import { RULES, isReserve, rosterText } from './lib/planner.js';
-import { playersFromCsv } from './lib/csv.js';
-import { runSync } from './lib/schedule.js';
-import { ACTIONS, ALLOWED_WHEN_CONFIRMED, newRound, addLog, snapshot, view, pendingReview, teamName } from './lib/rounds.js';
-import { ARENAS, DEFAULT_TEXTS, arenaFor, buildMatches, assignJerseys, resolveColors, clubOf, isOurs, colorLabel, colorHex, rinkSvg } from './lib/invite.js';
-import { DEMO_ROLES } from './backend-demo.js';
-import { mergeCustom, customKey, addMinutes, OUR_COLORS } from './lib/custom.js';
+import { CONFIG } from './config.js?v=20261108c';
+import { createSupabaseBackend } from './backend-supabase.js?v=20261108c';
+import { createDemoBackend } from './backend-demo.js?v=20261108c';
+import { RULES, isReserve, rosterText } from './lib/planner.js?v=20261108c';
+import { playersFromCsv } from './lib/csv.js?v=20261108c';
+import { runSync } from './lib/schedule.js?v=20261108c';
+import { ACTIONS, ALLOWED_WHEN_CONFIRMED, newRound, addLog, snapshot, view, pendingReview, teamName } from './lib/rounds.js?v=20261108c';
+import { ARENAS, DEFAULT_TEXTS, arenaFor, buildMatches, assignJerseys, resolveColors, clubOf, isOurs, colorLabel, colorHex, rinkSvg } from './lib/invite.js?v=20261108c';
+import { DEMO_ROLES } from './backend-demo.js?v=20261108c';
+import { mergeCustom, customKey, addMinutes, OUR_COLORS } from './lib/custom.js?v=20261108c';
 
 const $ = (s, el = document) => el.querySelector(s);
 const app = $('#app');
@@ -114,13 +114,19 @@ async function route() {
   if (inv && B?.mode === 'supabase') return viewInvite(inv[1], decodeURIComponent(inv[2]));
   if (h === '/forsta-admin' && B?.mode === 'supabase') return viewInvite('', '');
   if (!S.me) return viewLogin();
+  // Förhandsgranskning: administratör och lagplanerare kan se sidan som en ledare eller lagledare ser den, med de riktiga spelarna.
+  const real = S.me.real || S.me;
+  const va = B.mode !== 'demo' && (real.admin || real.planner) ? sessionStorage.getItem('jhc-viewas') : null;
+  S.me = va ? { ...real, real, planner: false, admin: false, teamlead: va === 'teamlead', role: 'leader', preview: va } : real;
   $('#top').hidden = false;
-  $('#demobar').hidden = B.mode !== 'demo';
+  $('#demobar').hidden = B.mode !== 'demo' && !va;
+  if (va) $('#demobar').innerHTML = `Du ser sidan som en ${va === 'teamlead' ? 'lagledare' : 'ledare'} ser den, med de riktiga spelarna. <button class="btn small" data-act="viewas" data-v="">Tillbaka till min vy</button>`;
   if (B.mode === 'demo') $('#demobar').innerHTML = `Demoläge med påhittade spelare. Visa som: <select data-act="demorole" aria-label="Visa som roll">${Object.entries(DEMO_ROLES).map(([k, v]) => `<option value="${k}" ${S.me.demoRole === k ? 'selected' : ''}>${v}</option>`).join('')}</select>`;
   const planner = !!S.me.planner;
   document.querySelectorAll('#tabs a').forEach((a) => { a.hidden = !planner && (a.dataset.tab === 'spelare' || a.dataset.tab === 'historik'); });
   $('#tabs a[data-tab=omgangar]').textContent = planner ? 'Omgångar' : 'Lag';
-  $('#who').innerHTML = `${esc(S.me.name)} · <button class="linkbtn" data-act="logout">${B.mode === 'demo' ? 'Avsluta demo' : 'Logga ut'}</button>`;
+  const canPreview = B.mode !== 'demo' && (real.admin || real.planner);
+  $('#who').innerHTML = `${esc(S.me.name)}${canPreview ? ` · <select class="viewas" data-act="viewassel" aria-label="Visa sidan som"><option value="">Min vy</option><option value="teamlead" ${va === 'teamlead' ? 'selected' : ''}>Visa som lagledare</option><option value="leader" ${va === 'leader' ? 'selected' : ''}>Visa som ledare</option></select>` : ''} · <button class="linkbtn" data-act="logout">${B.mode === 'demo' ? 'Avsluta demo' : 'Logga ut'}</button>`;
   try {
     if (!S.state || route.reload) { await refreshState(); route.reload = false; maybeAutoSync(); }
     renderNotices(h === '/notiser');
@@ -1599,7 +1605,8 @@ document.addEventListener('click', async (e) => {
   const d = b.dataset;
   try {
     switch (d.act) {
-      case 'logout': await B?.logout(); sessionStorage.removeItem('jhc-demo'); S.me = null; S.state = null; location.hash = '#/'; boot(); break;
+      case 'viewas': sessionStorage.removeItem('jhc-viewas'); S.state = null; route.reload = true; location.hash = '#/'; route(); break;
+      case 'logout': await B?.logout(); sessionStorage.removeItem('jhc-demo'); sessionStorage.removeItem('jhc-viewas'); S.me = null; S.state = null; location.hash = '#/'; boot(); break;
       case 'selday': {
         const boxes = [...document.querySelectorAll('#newround input[name=k]')].filter((x) => U(x.value)?.date === d.date);
         const all = boxes.every((x) => x.checked);
@@ -1713,6 +1720,7 @@ document.addEventListener('change', async (e) => {
       await setAvail(d.key, d.pid, t.checked);
       if (!t.checked && S.round?.status !== 'fastställt' && placementOf(d.pid).some((x) => x.key === d.key)) replacementDialog(d.pid, d.key);
     }
+    if (d.act === 'viewassel') { if (t.value) sessionStorage.setItem('jhc-viewas', t.value); else sessionStorage.removeItem('jhc-viewas'); S.state = null; route.reload = true; location.hash = '#/'; route(); return; }
     if (d.act === 'demorole') { S.me = await B.setDemoRole(t.value); S.state = null; route.reload = true; location.hash = '#/'; route(); }
     if (d.act === 'setroles') {
       const boxes = [...document.querySelectorAll(`input[data-act=setroles][data-id="${d.id}"]`)];

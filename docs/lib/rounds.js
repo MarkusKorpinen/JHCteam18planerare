@@ -1,7 +1,7 @@
 // Ändringar på en omgång. Körs i webbläsaren; databasen kontrollerar versionen när de sparas.
 // En omgång: { id, name, status, version, keys, settings, teams: {key: {goalies, lines}}, locks, log, lastSeed }
 // ctx: { uppdrag, players, availability, levels, history, teamPrefix, me }
-import { propose, validate, rosterText, DEFAULT_ROUND_SETTINGS, isReserve } from './planner.js';
+import { propose, validate, rosterText, DEFAULT_ROUND_SETTINGS, isReserve } from './planner.js?v=20261108c';
 
 const fail = (msg) => { throw new Error(msg); };
 export const emptyTeam = () => ({ goalies: [], lines: [] });
