@@ -107,8 +107,8 @@ export function createDemoBackend({ source = 'demo/schedule.json' } = {}) {
         customEvents: clone(db.customEvents || []), invitations: clone(db.invitations || {}), routineCategories: clone(db.routineCategories || []),
         routines: clone((db.routines || []).filter((r) => !r.deletedAt || ((me.teamlead || me.planner) && Date.now() - Date.parse(r.deletedAt) < 30 * 864e5))).map((r) => { delete r.content; return r; }),
         settings: clone(db.settings), players: clone(db.players).map((p) => (plan ? p : { ...p, level: null })), coaches: clone(db.coaches || []), coachAvailability: plan ? clone(db.coachAvailability || {}) : {}, availability: plan ? availMap() : {}, schedule: clone(db.schedule),
-        changes: clone(db.changes),
-        rounds: db.rounds.filter((r) => plan || r.status === 'fastställt').map((r) => ({ id: r.id, name: r.name, status: r.status, keys: r.keys, createdAt: r.createdAt, updatedAt: r.updatedAt, updatedByName: r.updatedByName, confirmedAt: r.confirmedAt })),
+        changes: clone(db.changes), noticesSeenAt: db.noticesSeenAt || null,
+        rounds: db.rounds.map((r) => ({ id: r.id, name: r.name, status: r.status, keys: r.keys, createdAt: r.createdAt, updatedAt: r.updatedAt, updatedByName: r.updatedByName, confirmedAt: r.confirmedAt })),
         history: plan ? clone(db.history) : [],
       };
     },
@@ -133,8 +133,16 @@ export function createDemoBackend({ source = 'demo/schedule.json' } = {}) {
       save();
     },
     ...syncApi,
+    async markNoticesSeen() { db.noticesSeenAt = now(); save(); return db.noticesSeenAt; },
     async ackChanges(key) { for (const c of db.changes) if (c.uppdrag_key === key && !c.ack_at) { c.ack_at = now(); c.ack_by_name = ME.name; } save(); },
     async createRound(r) { const x = { ...clone(r), id: uuid(), createdAt: now(), version: 0 }; stamp(x); db.rounds.unshift(x); save(); return clone(x); },
+    async getLeaderRound(id) {
+      const r = clone(findRound(id));
+      const nm = (x) => db.players.find((p) => p.id === x)?.name || '';
+      const sortN = (a) => [...new Set(a)].sort((x, y) => nm(x).localeCompare(nm(y), 'sv'));
+      return { id: r.id, name: r.name, status: r.status, version: r.version, keys: r.keys, updatedAt: r.updatedAt, updatedByName: r.updatedByName, confirmedAt: r.confirmedAt, confirmedBy: r.confirmedBy,
+        teams: Object.fromEntries(Object.entries(r.teams).map(([k, t]) => [k, { goalies: sortN(t.goalies || []), skaters: sortN((t.lines || []).flat()), coaches: t.coaches || [] }])) };
+    },
     async getRound(id) { return { ...clone(findRound(id)), comments: clone(db.comments.filter((c) => c.roundId === id)) }; },
     async getRoundVersion(id) { const r = findRound(id); return { version: r.version, updatedAt: r.updatedAt, updatedByName: r.updatedByName, last: r.log?.[0] }; },
     async saveRound(r, base, { history } = {}) {

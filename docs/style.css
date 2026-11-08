@@ -299,3 +299,20 @@ fieldset { min-width: 0; }
 .cematches td { padding: 3px 4px; }
 .cematches input, .cematches select { min-width: 0; width: 100%; }
 .cematches td:nth-child(1) { min-width: 92px; } .cematches td:nth-child(2), .cematches td:nth-child(3) { min-width: 130px; } .cematches td:nth-child(4) { min-width: 60px; }
+
+/* Notiser */
+.bell { position: relative; text-decoration: none; font-size: 1.15rem; line-height: 1; padding: 4px 6px; margin-left: auto; filter: grayscale(1) brightness(2); }
+.bell.has { filter: none; }
+.bell .count { position: absolute; top: -4px; right: -6px; background: #e0263c; color: #fff; font-size: .68rem; font-weight: 700; border-radius: 99px; padding: 1px 5px; min-width: 16px; text-align: center; }
+#notices:empty { display: none; }
+#notices { padding-top: 10px; }
+.alert.notice { background: #fff4e0; border: 1px solid #f0b54a; color: #4a3200; margin: 0; }
+.noticelist { list-style: none; padding: 0; margin: 6px 0 8px; display: flex; flex-direction: column; gap: 8px; }
+.noticelist.big li { border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+.noticelist li.unread { border-left: 3px solid #e0263c; padding-left: 8px; }
+.noticeitems { margin: 2px 0 2px 18px; padding: 0; }
+
+.btn.danger { color: var(--bad); border-color: #f0b4bc; }
+.cerow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.cebtns { display: flex; gap: 6px; }
+.dangerzone { border-color: #f0b4bc; }

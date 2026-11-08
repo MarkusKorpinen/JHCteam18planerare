@@ -59,15 +59,34 @@ export function diffUppdrag(prev, next, isBaseline) {
   const out = { ...next };
   const changes = [];
   if (isBaseline) return { uppdrag: out, changes };
+  // Cuper har datumet i nyckeln. Försvinner en och dyker upp igen med samma lag och serie räknas den som flyttad.
+  const groupOf = (u) => `${String(u.block).split('-')[0]}|${u.teamId}|${u.group || ''}`;
+  const added = Object.values(next).filter((n) => !prev?.[n.key]);
+  const movedTo = new Map();
+  for (const [key, p] of Object.entries(prev || {})) {
+    if (next[key] || p.missing) continue;
+    const n = added.find((a) => groupOf(a) === groupOf(p) && ![...movedTo.values()].includes(a.key));
+    if (n) movedTo.set(key, n.key);
+  }
+  const movedFrom = new Map([...movedTo].map(([a, b]) => [b, a]));
   for (const [key, p] of Object.entries(prev || {})) {
     const n = next[key];
+    if (!n && movedTo.has(key)) {
+      const m = next[movedTo.get(key)];
+      const items = [`Poolspelet har flyttats ${p.date} → ${m.date}`];
+      if (p.venue !== m.venue) items.push(`Ny hall ${p.venue} → ${m.venue}`);
+      items.push(`Nya tider: ${m.matches.filter((x) => !x.missing).map((x) => x.start || 'ej satt').join(', ')}`);
+      changes.push({ key, items, movedTo: m.key });
+      out[key] = { ...p, missing: true, movedTo: m.key, matches: p.matches.map((x) => ({ ...x, missing: true })) };
+      continue;
+    }
     if (!n) {
       if (!p.missing) changes.push({ key, items: ['Poolspelet saknas i källan'] });
       out[key] = { ...p, missing: true, matches: p.matches.map((m) => ({ ...m, missing: true })) };
       continue;
     }
     const items = [];
-    if (p.date !== n.date) items.push(`Nytt datum ${p.date} → ${n.date}`);
+    if (p.date !== n.date) items.push(`Poolspelet har flyttats ${p.date} → ${n.date}`);
     if (p.venue !== n.venue) items.push(`Ny hall ${p.venue} → ${n.venue}`);
     const nm = new Map(n.matches.map((m) => [m.id, m]));
     for (const m of p.matches) {
@@ -86,7 +105,7 @@ export function diffUppdrag(prev, next, isBaseline) {
     if (p.missing && !n.missing) items.push('Poolspelet finns i källan igen');
     if (items.length) changes.push({ key, items });
   }
-  for (const key of Object.keys(next)) if (!prev?.[key]) changes.push({ key, items: ['Nytt poolspel i källan'], isNew: true });
+  for (const key of Object.keys(next)) if (!prev?.[key]) changes.push({ key, items: [movedFrom.has(key) ? `Flyttat hit från ${prev[movedFrom.get(key)].date}` : 'Nytt poolspel i källan'], isNew: true });
   return { uppdrag: out, changes };
 }
 

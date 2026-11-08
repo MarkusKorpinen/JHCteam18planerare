@@ -2,10 +2,10 @@
 import { CONFIG } from './config.js';
 import { createSupabaseBackend } from './backend-supabase.js';
 import { createDemoBackend } from './backend-demo.js';
-import { RULES, isReserve } from './lib/planner.js';
+import { RULES, isReserve, rosterText } from './lib/planner.js';
 import { playersFromCsv } from './lib/csv.js';
 import { runSync } from './lib/schedule.js';
-import { ACTIONS, ALLOWED_WHEN_CONFIRMED, newRound, addLog, snapshot, view, pendingReview } from './lib/rounds.js';
+import { ACTIONS, ALLOWED_WHEN_CONFIRMED, newRound, addLog, snapshot, view, pendingReview, teamName } from './lib/rounds.js';
 import { ARENAS, DEFAULT_TEXTS, arenaFor, buildMatches, assignJerseys, resolveColors, clubOf, isOurs, colorLabel, colorHex, rinkSvg } from './lib/invite.js';
 import { DEMO_ROLES } from './backend-demo.js';
 import { mergeCustom, customKey, addMinutes, OUR_COLORS } from './lib/custom.js';
@@ -123,6 +123,7 @@ async function route() {
   $('#who').innerHTML = `${esc(S.me.name)} · <button class="linkbtn" data-act="logout">${B.mode === 'demo' ? 'Avsluta demo' : 'Logga ut'}</button>`;
   try {
     if (!S.state || route.reload) { await refreshState(); route.reload = false; maybeAutoSync(); }
+    renderNotices(h === '/notiser');
     const pr = h.match(/^\/utskrift\/([\w-]+)(?:\/(.+))?$/);
     if (pr) return await viewPrint(pr[1], pr[2] ? decodeURIComponent(pr[2]) : null);
     document.body.classList.remove('printmode');
@@ -130,6 +131,7 @@ async function route() {
     const rt = h.match(/^\/rutin\/([\w-]+)(?:\/(redigera|utskrift))?$/);
     const mi = h.match(/^\/matchinbjudan\/(.+?)(\/utskrift)?$/);
     const ce = h.match(/^\/eget\/([\w-]+)$/);
+    if (h === '/notiser') { document.querySelectorAll('#tabs a').forEach((a) => a.classList.remove('on')); window.scrollTo(0, 0); return viewNotices(); }
     let tab = m ? 'omgangar' : rt ? 'rutiner' : mi ? 'schema' : ce ? 'omgangar' : (h.slice(1) || 'omgangar');
     if (!planner && (tab === 'spelare' || tab === 'historik')) tab = 'omgangar';
     document.querySelectorAll('#tabs a').forEach((a) => a.classList.toggle('on', a.dataset.tab === tab));
@@ -145,9 +147,62 @@ async function route() {
   }
 }
 async function refreshState() {
-  const st = await B.loadState();
+  const st = await B.loadState({ planner: !!S.me?.planner });
   S.state = mergeCustom(st, st.customEvents || []);
   S.state.today = stockholmToday();
+  if (S.me && $('#notices')) renderNotices(location.hash === '#/notiser');
+}
+
+// ---------- notiser om ändrade tider och flyttade poolspel ----------
+// Alla ändringar som synken hittar sparas i schedule_changes. Här visas de som notiser för alla inloggade.
+const NOTICE_DAYS = 30;
+function notices() {
+  const yesterday = new Date(Date.parse(S.state.today + 'T12:00:00') - 864e5).toISOString().slice(0, 10);
+  return (S.state.changes || []).filter((c) => !c.is_new && Date.now() - Date.parse(c.at) < NOTICE_DAYS * 864e5
+    && (!c.date || c.date >= yesterday || (c.items || []).some((i) => /→ (\d{4}-\d{2}-\d{2})/.exec(i)?.[1] >= yesterday)));
+}
+function seenAt() {
+  // Supabase sparar läst-tiden per person. Saknas tabellen (ingen migrering körd) används webbläsarens minne.
+  if (S.state.noticesSeenAt !== undefined) return S.state.noticesSeenAt || new Date(Date.now() - 7 * 864e5).toISOString();
+  try { return localStorage.getItem('jhc-notices-seen') || new Date(Date.now() - 7 * 864e5).toISOString(); } catch { return null; }
+}
+const unread = () => { const s = seenAt(); return notices().filter((c) => !s || Date.parse(c.at) > Date.parse(s)); };
+const prettyItem = (t) => esc(t).replace(/\d{4}-\d{2}-\d{2}/g, (d) => fDate(d));
+function noticeText(c) {
+  const u = U(c.uppdrag_key);
+  const label = c.label || u?.label || 'Poolspel';
+  const where = u?.group ? ` · ${esc(u.group)}` : '';
+  const rs = (S.state.rounds || []).filter((r) => r.keys.includes(c.uppdrag_key));
+  return `<strong>${esc(label)} ${esc(fDate(c.date))}</strong>${where}
+    <ul class="noticeitems">${(c.items || []).map((i) => `<li>${prettyItem(i)}</li>`).join('')}</ul>
+    ${rs.length ? `<span class="small">Påverkar ${rs.map((r) => `<a href="#/omgang/${r.id}">${esc(r.name)}</a>`).join(', ')}</span>` : ''}`;
+}
+function renderNotices(onPage) {
+  const n = unread();
+  const cnt = $('#bellcount');
+  cnt.hidden = !n.length; cnt.textContent = n.length;
+  $('#bell').classList.toggle('has', !!n.length);
+  $('#notices').innerHTML = onPage || !n.length ? '' : `<div class="alert notice">
+    <strong>${n.length === 1 ? 'Ändring i matchschemat' : `${n.length} ändringar i matchschemat`}</strong>
+    <ul class="noticelist">${n.slice(0, 3).map((c) => `<li>${noticeText(c)}</li>`).join('')}</ul>
+    <div class="row">${n.length > 3 ? `<a class="btn small" href="#/notiser">Visa alla ${n.length}</a>` : '<a class="btn small" href="#/notiser">Visa notiser</a>'}<button class="btn small" data-act="noticeseen">Markera som lästa</button></div>
+  </div>`;
+}
+async function markSeen() {
+  const t = await B.markNoticesSeen?.().catch(() => null);
+  const at = t || new Date().toISOString();
+  if (S.state.noticesSeenAt !== undefined) S.state.noticesSeenAt = at;
+  try { localStorage.setItem('jhc-notices-seen', at); } catch {}
+}
+function viewNotices() {
+  const s = seenAt();
+  const all = notices();
+  app.innerHTML = `<section class="panel">
+    <h2>Notiser</h2>
+    <p class="small muted">Ändrade matchtider, flyttade poolspel, ny hall och inställda matcher från swehockey (via matchsidan) de senaste ${NOTICE_DAYS} dagarna. Schemat kontrolleras flera gånger per dag.</p>
+    ${all.length ? `<ul class="noticelist big">${all.map((c) => `<li class="${!s || Date.parse(c.at) > Date.parse(s) ? 'unread' : ''}"><span class="small muted block">${fDT(c.at)}${!s || Date.parse(c.at) > Date.parse(s) ? ' <span class="badge new">Ny</span>' : ''}</span>${noticeText(c)}</li>`).join('')}</ul>` : '<p class="muted">Inga ändringar i matchschemat den senaste tiden.</p>'}
+  </section>`;
+  if (unread().length) markSeen().then(() => renderNotices(true));
 }
 async function maybeAutoSync() {
   const sch = S.state.schedule;
@@ -241,19 +296,20 @@ function upcomingByDate() {
 }
 const needsReview = (r) => r.keys.some((k) => pendingReview(r, k, S.state.changes).length);
 function viewTeams() {
-  // Ledare och lagledare: bara fastställda lag, utan färger
-  const rs = S.state.rounds.filter((r) => r.status === 'fastställt');
+  // Ledare och lagledare: alla omgångar, även utkast, men bara namn (inga kedjor eller nivåfärger)
+  const rs = S.state.rounds;
   app.innerHTML = `
   ${syncBanner()}
   <section class="panel">
-    <h2>Fastställda lag</h2>
-    <p class="small muted">Lagen visas här när lagplanerarna har fastställt dem. Matcher och tider finns under Schema.</p>
+    <h2>Lag</h2>
+    <p class="small muted">Utkast kan ändras av lagplanerarna fram till de fastställs. Matcher och tider finns under Schema.</p>
     ${rs.length ? `<ul class="rounds">${rs.map((r) => `
       <li><a href="#/omgang/${r.id}">
         <span class="rname">${esc(r.name)}</span>
+        <span class="badge ${r.status === 'fastställt' ? 'ok' : 'draft'}">${r.status === 'fastställt' ? 'Fastställt' : 'Utkast'}</span>
         <span class="small muted block">${r.keys.map((k) => esc(U(k)?.label || '?') + ' ' + fDate(U(k)?.date)).join(' · ')}</span>
-        <span class="small muted block">Fastställt ${fDT(r.confirmedAt)}</span>
-      </a></li>`).join('')}</ul>` : '<p class="muted">Inga fastställda lag ännu.</p>'}
+        <span class="small muted block">${r.status === 'fastställt' ? `Fastställt ${fDT(r.confirmedAt)}` : `Senast ändrat ${fDT(r.updatedAt)}${r.updatedByName ? ` av ${esc(r.updatedByName)}` : ''}`}</span>
+      </a></li>`).join('')}</ul>` : '<p class="muted">Inga lag planerade ännu.</p>'}
   </section>
   ${S.me.teamlead ? customPanel() : ''}`;
 }
@@ -312,8 +368,8 @@ function viewRounds() {
 
 // ---------- en omgång ----------
 async function viewRound(id) {
+  if (!S.me.planner) { S.round = await B.getLeaderRound(id); return renderRoundReadOnly(); }
   S.round = await B.getRound(id);
-  if (!S.me.planner) return renderRoundReadOnly();
   renderRound();
   S.poll = setInterval(checkVersion, 20000);
 }
@@ -426,31 +482,36 @@ function teamCard(key) {
 
 function renderRoundReadOnly() {
   const r = S.round;
+  const draft = r.status !== 'fastställt';
   const name = (id) => esc(P(id)?.name || '');
   app.innerHTML = `
   <a href="#/" class="back">← Lag</a>
   <section class="roundhead">
-    <h1>${esc(r.name)}</h1>
-    <p class="small muted">Fastställt ${fDT(r.confirmedAt)} av ${esc(r.confirmedBy || '')}</p>
+    <h1>${esc(r.name)} <span class="badge ${draft ? 'draft' : 'ok'}">${draft ? 'Utkast' : 'Fastställt'}</span></h1>
+    ${draft ? `<div class="alert warn">Det här är ett utkast. Lagen kan ändras innan lagplanerarna fastställer dem. Senast ändrat ${fDT(r.updatedAt)}${r.updatedByName ? ` av ${esc(r.updatedByName)}` : ''}.</div>`
+      : `<p class="small muted">Fastställt ${fDT(r.confirmedAt)} av ${esc(r.confirmedBy || '')}</p>
     <div class="row">
       <button class="btn" data-act="copyall">Kopiera laglista för hela omgången</button>
       <a class="btn" href="#/utskrift/${r.id}">PDF för hela omgången</a>
-    </div>
+    </div>`}
   </section>
   <div class="cards">${r.keys.map((key) => {
-    const u = U(key), t = r.teams[key] || { goalies: [], lines: [] };
+    const u = U(key), t = r.teams[key] || { goalies: [], skaters: [] };
     return `<article class="card" style="--c:${teamColor(u)}">
       <header class="cardhead ${u?.color === 'vit' || u?.color === 'gul' ? 'light' : ''}"><div><h3>${esc(u?.label || '')}</h3><div class="small">${fDate(u?.date)}</div></div></header>
       <div class="cardbody">
         <div class="pool small"><div><strong>${esc(u?.venue || '')}</strong>${u?.host ? ` · arrangör ${esc(u.host)}` : ''}</div>
         <ul class="matches">${(u?.matches || []).map((m) => `<li class="${m.missing ? 'missing' : ''}"><span class="time">${esc(m.start || 'tid ej satt')}</span> mot ${esc(opponent(u, m))}</li>`).join('')}</ul></div>
-        <h4>Målvakt</h4><div class="namelist">${t.goalies.map((id) => `<div>${name(id)}</div>`).join('') || '<div class="muted">–</div>'}</div>
-        <h4>Utespelare</h4><div class="namelist">${t.lines.flat().map((id) => `<div>${name(id)}</div>`).join('') || '<div class="muted">–</div>'}</div>
+        <h4>Målvakt</h4><div class="namelist">${(t.goalies || []).map((id) => `<div>${name(id)}</div>`).join('') || '<div class="muted">–</div>'}</div>
+        <h4>Utespelare</h4><div class="namelist">${(t.skaters || []).map((id) => `<div>${name(id)}</div>`).join('') || '<div class="muted">–</div>'}</div>
         <h4>Tränare</h4><div class="namelist">${(t.coaches || []).map((id) => `<div>${esc(C(id)?.name || '')}</div>`).join('') || '<div class="muted">–</div>'}</div>
-        <div class="row cardactions"><button class="btn" data-act="copyteam" data-key="${esc(key)}">Kopiera laglista</button><a class="btn" href="#/utskrift/${r.id}/${encodeURIComponent(key)}">Laglista som PDF</a></div>
+        ${draft ? '' : `<div class="row cardactions"><button class="btn" data-act="copyteam" data-key="${esc(key)}">Kopiera laglista</button><a class="btn" href="#/utskrift/${r.id}/${encodeURIComponent(key)}">Laglista som PDF</a></div>`}
       </div></article>`;
   }).join('')}</div>`;
-  S.view = view(r, ctx());
+  const copy = {};
+  for (const k of r.keys) copy[k] = rosterText(teamName(ctx(), k), { goalies: r.teams[k]?.goalies || [], lines: [r.teams[k]?.skaters || []] }, S.state.players);
+  copy.all = r.keys.map((k) => copy[k]).join('\n\n\n');
+  S.view = { copy };
 }
 
 function renderRound(keepScroll) {
@@ -986,7 +1047,8 @@ function kidsDialog(cid) {
 
 // ---------- utskrift / PDF ----------
 async function viewPrint(roundId, onlyKey) {
-  const r = await B.getRound(roundId);
+  const r = S.me.planner ? await B.getRound(roundId) : await B.getLeaderRound(roundId);
+  if (!S.me.planner) for (const t of Object.values(r.teams || {})) t.lines = [t.skaters || []];
   const keys = onlyKey ? [onlyKey] : r.keys;
   const showInfo = localStorage.getItem('jhc-print-info') !== '0';
   const logo = S.state.settings.logo || 'logo.png'; // klubbens logga följer med sidan; en uppladdad logga går före
@@ -1253,15 +1315,42 @@ document.addEventListener('pointerup', async (e) => {
 
 // ---------- egna matchspel ----------
 const CE_TYPES = ['Träningsmatch', 'Poolspel', 'Cup'];
+const CE_DEF = { Träningsmatch: 'träningsmatchen', Poolspel: 'poolspelet', Cup: 'cupen' };
+const ceDef = (t) => CE_DEF[t] || 'matchspelet';
 function customPanel() {
-  const evs = (S.state.customEvents || []).filter((e) => e.date >= S.state.today).sort((a, b) => a.date.localeCompare(b.date));
+  const all = [...(S.state.customEvents || [])].sort((a, b) => a.date.localeCompare(b.date));
+  const evs = all.filter((e) => e.date >= S.state.today), past = all.filter((e) => e.date < S.state.today).reverse();
+  const row = (e) => { const n = (e.data.matches || []).length; return `<div class="sched cerow">
+      <a href="#/eget/${e.id}" style="text-decoration:none;color:inherit;flex:1;min-width:0">
+      <strong>${esc(fDate(e.date))}</strong> · ${esc(e.data.type || 'Poolspel')}${e.title ? ` – ${esc(e.title)}` : ''} <span class="badge">${e.data.home === false ? 'Borta' : 'Hemma'}</span>
+      <span class="small block">${esc(e.venue)} · ${esc((e.data.ourTeams || []).map((t) => t.split(' ').pop()).join(', '))} · ${n ? `${n} matcher` : '<span class="badge bad">Matcher saknas</span>'}</span></a>
+      <span class="cebtns"><a class="btn small" href="#/eget/${e.id}">Ändra</a><button type="button" class="btn small danger" data-act="ce-delete" data-id="${e.id}">Ta bort</button></span></div>`; };
   return `<section class="panel">
     <div class="row"><h2 style="flex:1;margin:0">Egna matcher och cuper</h2><a class="btn primary" href="#/eget/ny">+ Lägg till</a></div>
     <p class="small muted">Träningsmatcher, egna poolspel och cuper utöver seriespelet.</p>
-    ${evs.map((e) => { const n = (e.data.matches || []).length; return `<a class="sched block" href="#/eget/${e.id}" style="text-decoration:none;color:inherit">
-      <strong>${esc(fDate(e.date))}</strong> · ${esc(e.data.type || 'Poolspel')}${e.title ? ` – ${esc(e.title)}` : ''} <span class="badge">${e.data.home === false ? 'Borta' : 'Hemma'}</span>
-      <span class="small block">${esc(e.venue)} · ${esc((e.data.ourTeams || []).map((t) => t.split(' ').pop()).join(', '))} · ${n ? `${n} matcher` : '<span class="badge bad">Matcher saknas</span>'}</span></a>`; }).join('') || '<p class="small muted">Inga inlagda.</p>'}
+    ${evs.map(row).join('') || '<p class="small muted">Inga kommande inlagda.</p>'}
+    ${past.length ? `<details><summary class="small">Tidigare (${past.length})</summary>${past.map(row).join('')}</details>` : ''}
   </section>`;
+}
+// Tar bort ett eget matchspel. Omgångar som bara gäller det tas bort samtidigt om lagplaneraren vill.
+async function deleteCustomEvent(id) {
+  const ev = (S.state.customEvents || []).find((e) => e.id === id);
+  if (!ev) return;
+  const name = `${ceDef(ev.data.type || 'Poolspel')}${ev.title ? ` ”${ev.title}”` : ''} ${fDate(ev.date)}`;
+  const prefix = `custom:${id}|`;
+  const rounds = (S.state.rounds || []).filter((r) => r.keys.some((k) => k.startsWith(prefix)));
+  const only = rounds.filter((r) => r.keys.every((k) => k.startsWith(prefix)));
+  const mixed = rounds.filter((r) => !only.includes(r));
+  let msg = `Ta bort ${name}? Matcherna och matchinbjudan försvinner.`;
+  if (only.length && S.me.planner) msg += ` Omgången ${only.map((r) => `”${r.name}”`).join(', ')} som planerats för den tas också bort.`;
+  else if (only.length) msg += ` Omgången ${only.map((r) => `”${r.name}”`).join(', ')} finns kvar tills en lagplanerare tar bort den.`;
+  if (mixed.length) msg += ` ${mixed.map((r) => `”${r.name}”`).join(', ')} innehåller även andra poolspel och får en varning i stället.`;
+  if (!(await askConfirm(msg))) return false;
+  await B.deleteCustomEvent(id);
+  if (S.me.planner) for (const r of only) await B.deleteRound(r.id).catch(() => {});
+  await refreshState();
+  toast(`${name[0].toUpperCase()}${name.slice(1)} har tagits bort.`);
+  return true;
 }
 function editCustomEvent(id) {
   if (!(S.me.planner || S.me.teamlead)) { app.innerHTML = '<div class="alert warn">Bara lagledare och lagplanerare kan lägga in egna matcher.</div>'; return; }
@@ -1318,11 +1407,15 @@ function editCustomEvent(id) {
           <button type="button" class="btn small" data-act="ce-add">+ Lägg till match</button>
         </fieldset>
         <div class="row"><button class="btn primary">Spara</button>
-          ${c.id ? '<button type="button" class="linkbtn danger" data-act="ce-delete">Ta bort</button>' : ''}</div>
+          <a class="btn" href="#/omgangar">${c.id ? 'Tillbaka' : 'Avbryt'}</a></div>
         ${c.id ? `<fieldset><legend>4. Nästa steg</legend><div class="stack">
           ${S.me.planner ? (existing ? `<a class="btn" href="#/omgang/${existing.id}">Planera lagen – öppna ${esc(existing.name)}</a>` : `<button type="button" class="btn" data-act="ce-round" ${savedMatches ? '' : 'disabled'}>Planera lagen – skapa omgång med lagförslag</button>`) : ''}
           ${c.home ? (savedMatches ? `<a class="btn" href="#/matchinbjudan/${encodeURIComponent(customKey(c))}">Gör matchinbjudan</a>` : '<p class="small muted">Matchinbjudan kan göras när matcherna är inlagda och sparade.</p>') : ''}
-        </div></fieldset>` : ''}
+        </div></fieldset>
+        <fieldset class="dangerzone"><legend>Ta bort</legend>
+          <p class="small muted" style="margin:0 0 6px">Blev det inte av? Ta bort hela ${ceDef(c.type)} med matcher och matchinbjudan.</p>
+          <button type="button" class="btn danger" data-act="ce-delete" data-id="${c.id}">Ta bort ${ceDef(c.type)}</button>
+        </fieldset>` : ''}
       </form>
     </section>`;
     const f = $('#ceform');
@@ -1545,6 +1638,7 @@ document.addEventListener('click', async (e) => {
         const round = await B.createRound(newRound(name, keys, S.state.settings.roundDefaults, ctx()));
         await refreshState(); location.hash = `#/omgang/${round.id}`; break;
       }
+      case 'noticeseen': await markSeen(); renderNotices(false); break;
       case 'ce-del': S.ce.read(); S.ce.matches.splice(Number(d.i), 1); S.ce.render(); break;
       case 'ce-roundrobin': {
         S.ce.read();
@@ -1555,9 +1649,12 @@ document.addEventListener('click', async (e) => {
         S.ce.matches = rr.flatMap((games, r) => games.map(([home, away], i) => ({ start: addMinutes(S.ce.start, r * S.ce.length), home, away, plan: (i % 4) + 1 })));
         S.ce.render(); toast(`${S.ce.matches.length} matcher föreslagna.`); break;
       }
-      case 'ce-delete':
-        if (!(await askConfirm('Ta bort? Omgångar som använder matcherna visar en varning.'))) return;
-        await B.deleteCustomEvent(S.ce.id); await refreshState(); location.hash = '#/omgangar'; break;
+      case 'ce-delete': {
+        const ok = await deleteCustomEvent(d.id || S.ce.id);
+        if (!ok) break;
+        if (location.hash === '#/omgangar' || location.hash === '#/') route(); else location.hash = '#/omgangar';
+        break;
+      }
       case 'catadd': { const n = $('#newcat').value.trim(); if (!n) return; await B.addCategory(n.slice(0, 40), (S.state.routineCategories || []).length + 1); await refreshState(); viewRoutines(); break; }
       case 'catrename': { const c = S.state.routineCategories.find((x) => x.id === d.id); const n = await askText('Nytt namn', c?.name); if (n?.trim()) { await B.updateCategory(d.id, { name: n.trim().slice(0, 40) }); await refreshState(); viewRoutines(); } break; }
       case 'catdelete': if (await askConfirm('Ta bort kategorin? Rutinerna i den blir kvar utan kategori.')) { await B.deleteCategory(d.id); await refreshState(); viewRoutines(); } break;

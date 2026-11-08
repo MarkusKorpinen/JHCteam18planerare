@@ -362,6 +362,7 @@ export function validate({ round, uppdragMap, players, availability, levels, coa
     const w = [];
     const skaters = (t.lines || []).flat();
     if (!u) w.push({ level: 'error', text: 'Poolspelet finns inte längre i schemat.' });
+    else if (u.movedTo && uppdragMap[u.movedTo]) w.push({ level: 'error', text: `Poolspelet har flyttats till ${uppdragMap[u.movedTo].date}. Välj det nya datumet under Ny omgång och flytta över laget.` });
     else if (u.missing) w.push({ level: 'error', text: 'Poolspelet saknas i källan. Kontrollera med arrangören innan ni skickar laglistan.' });
     else if (u.matches?.some((m) => m.missing)) w.push({ level: 'warn', text: 'En eller flera matcher saknas i källan.' });
     if ((t.goalies || []).length < s.goalies)
