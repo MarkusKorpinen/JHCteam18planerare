@@ -1,14 +1,14 @@
 // Järfälla HC Team 2018 – gränssnitt. Koden innehåller ingen spelardata; den hämtas efter inloggning.
-import { CONFIG } from './config.js?v=20261108c';
-import { createSupabaseBackend } from './backend-supabase.js?v=20261108c';
-import { createDemoBackend } from './backend-demo.js?v=20261108c';
-import { RULES, isReserve, rosterText } from './lib/planner.js?v=20261108c';
-import { playersFromCsv } from './lib/csv.js?v=20261108c';
-import { runSync } from './lib/schedule.js?v=20261108c';
-import { ACTIONS, ALLOWED_WHEN_CONFIRMED, newRound, addLog, snapshot, view, pendingReview, teamName } from './lib/rounds.js?v=20261108c';
-import { ARENAS, DEFAULT_TEXTS, arenaFor, buildMatches, assignJerseys, resolveColors, clubOf, isOurs, colorLabel, colorHex, rinkSvg } from './lib/invite.js?v=20261108c';
-import { DEMO_ROLES } from './backend-demo.js?v=20261108c';
-import { mergeCustom, customKey, addMinutes, OUR_COLORS } from './lib/custom.js?v=20261108c';
+import { CONFIG } from './config.js?v=20261108d';
+import { createSupabaseBackend } from './backend-supabase.js?v=20261108d';
+import { createDemoBackend } from './backend-demo.js?v=20261108d';
+import { RULES, isReserve, rosterText } from './lib/planner.js?v=20261108d';
+import { playersFromCsv } from './lib/csv.js?v=20261108d';
+import { runSync } from './lib/schedule.js?v=20261108d';
+import { ACTIONS, ALLOWED_WHEN_CONFIRMED, newRound, addLog, snapshot, view, pendingReview, teamName } from './lib/rounds.js?v=20261108d';
+import { ARENAS, DEFAULT_TEXTS, arenaFor, buildMatches, assignJerseys, resolveColors, clubOf, isOurs, colorLabel, colorHex, rinkSvg } from './lib/invite.js?v=20261108d';
+import { DEMO_ROLES } from './backend-demo.js?v=20261108d';
+import { mergeCustom, customKey, addMinutes, OUR_COLORS } from './lib/custom.js?v=20261108d';
 
 const $ = (s, el = document) => el.querySelector(s);
 const app = $('#app');

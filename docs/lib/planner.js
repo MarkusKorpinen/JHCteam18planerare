@@ -98,6 +98,12 @@ export function propose(o) {
   const ordCoaches = coaches.filter((c) => !isReserve(c));
   const parentsOf = new Map();
   for (const c of ordCoaches) for (const pid of c.children || []) { if (!parentsOf.has(pid)) parentsOf.set(pid, []); parentsOf.get(pid).push(c.id); }
+  // Syskon: barn till samma ledare ska spela på samma ställe samma dag, annars kan ledaren inte vara med båda.
+  const siblingsOf = new Map();
+  for (const c of coaches) {
+    const kids = (c.children || []).filter((id) => byId.has(id));
+    for (const a of kids) for (const b of kids) if (a !== b) { if (!siblingsOf.has(a)) siblingsOf.set(a, new Set()); siblingsOf.get(a).add(b); }
+  }
   const sites = new Map();
   for (const u of U) { if (!sites.has(u.site)) sites.set(u.site, []); sites.get(u.site).push(u); }
   const coachLocks = (o.coachLocks || []).filter((l) => coachById.has(l.cid));
@@ -113,8 +119,17 @@ export function propose(o) {
     usedDates.get(pid).add(u.date);
     usedCount.set(pid, (usedCount.get(pid) || 0) + 1);
   };
+  // Sant om inget syskon redan spelar på ett annat ställe samma dag
+  const familyOk = (pid, to, ignore = null) => {
+    for (const sib of siblingsOf.get(pid) || []) {
+      if (sib === ignore) continue;
+      for (const u of U) if (u.date === to.date && u.site !== to.site && (u.goalies.includes(sib) || u.skaters.includes(sib))) return false;
+    }
+    return true;
+  };
   const eligible = (pid, u) =>
     byId.has(pid) &&
+    familyOk(pid, u) &&
     isAvailable(o.availability, u.key, pid) &&
     !(usedDates.get(pid)?.has(u.date)) &&
     (usedCount.get(pid) || 0) < s.maxPerPlayer &&
@@ -229,8 +244,9 @@ export function propose(o) {
     }
     return sum;
   };
-  const canSwapInto = (pid, from, to) => {
+  const canSwapInto = (pid, from, to, other = null) => {
     if (!isAvailable(o.availability, to.key, pid)) return false;
+    if (from.site !== to.site && (siblingsOf.get(pid)?.has(other) || !familyOk(pid, to, other))) return false;
     if (to.goalies.includes(pid) || to.skaters.includes(pid)) return false;
     if (from.date === to.date) return true;
     return !(usedDates.get(pid)?.has(to.date));
@@ -245,7 +261,7 @@ export function propose(o) {
       for (const pa of a.skaters) for (const pb of b.skaters) {
         if (locked.has(`${pa}@${a.key}`) || locked.has(`${pb}@${b.key}`)) continue;
         if (byId.get(pa).level === byId.get(pb).level) continue;
-        if (!canSwapInto(pa, a, b) || !canSwapInto(pb, b, a)) continue;
+        if (!canSwapInto(pa, a, b, pb) || !canSwapInto(pb, b, a, pa)) continue;
         a.skaters[a.skaters.indexOf(pa)] = pb; b.skaters[b.skaters.indexOf(pb)] = pa;
         if (imbalance() < base - 1e-9) { moveDate(pa, a, b); moveDate(pb, b, a); improved = true; break outer; }
         a.skaters[a.skaters.indexOf(pb)] = pa; b.skaters[b.skaters.indexOf(pa)] = pb;
@@ -270,7 +286,7 @@ export function propose(o) {
       for (const pa of a.skaters) for (const pb of b.skaters) {
         if (locked.has(`${pa}@${a.key}`) || locked.has(`${pb}@${b.key}`)) continue;
         if (byId.get(pa).level !== byId.get(pb).level) continue;
-        if (!canSwapInto(pa, a, b) || !canSwapInto(pb, b, a)) continue;
+        if (!canSwapInto(pa, a, b, pb) || !canSwapInto(pb, b, a, pa)) continue;
         const gain = base - (teamCost(a, pa, pb) + teamCost(b, pb, pa));
         if (gain > 0 && (!best || gain > best.gain)) best = { a, b, pa, pb, gain };
       }
@@ -405,8 +421,27 @@ export function validate({ round, uppdragMap, players, availability, levels, coa
     if (!coachDates.has(k2)) coachDates.set(k2, []);
     coachDates.get(k2).push(key);
   }
-  for (const [k2, keys] of coachDates) if (keys.length > 1) for (const k of keys)
-    perTeam[k].push({ level: 'warn', text: `Tränaren ${coachName(k2.split('|')[0])} är vald i ${keys.length} poolspel samma dag.` });
+  const siteOf = (key) => `${uppdragMap[key]?.date}|${uppdragMap[key]?.venue || key}`;
+  for (const [k2, keys] of coachDates) if (keys.length > 1) {
+    const split = new Set(keys.map(siteOf)).size > 1;
+    for (const k of keys) perTeam[k].push(split
+      ? { level: 'error', text: `Tränaren ${coachName(k2.split('|')[0])} är vald på ${keys.length} olika ställen samma dag och kan inte vara på båda.` }
+      : { level: 'warn', text: `Tränaren ${coachName(k2.split('|')[0])} är vald i ${keys.length} lag samma dag.` });
+  }
+  // Syskon (barn till samma ledare) på olika ställen samma dag
+  const where = new Map(); // pid -> [key]
+  for (const key of round.keys) for (const pid of [...(round.teams?.[key]?.goalies || []), ...(round.teams?.[key]?.lines || []).flat()]) { if (!where.has(pid)) where.set(pid, []); where.get(pid).push(key); }
+  const pName = (id) => byId.get(id)?.name || '';
+  for (const c of coaches) {
+    if (c.active === false) continue;
+    const kids = (c.children || []).filter((id) => where.has(id));
+    for (let i = 0; i < kids.length; i++) for (let j = i + 1; j < kids.length; j++)
+      for (const ka of where.get(kids[i])) for (const kb of where.get(kids[j])) {
+        if (uppdragMap[ka]?.date !== uppdragMap[kb]?.date || siteOf(ka) === siteOf(kb)) continue;
+        const text = `Syskonen ${pName(kids[i])} och ${pName(kids[j])} spelar på olika ställen samma dag. ${c.name} kan inte vara med båda.`;
+        perTeam[ka].push({ level: 'warn', text }); perTeam[kb].push({ level: 'warn', text });
+      }
+  }
   const unplaced = players.filter((p) => p.active !== false && !placements.has(p.id) && round.keys.some((k) => isAvailable(availability, k, p.id)));
   const ordOut = unplaced.filter((p) => !isReserve(p));
   const reservesIn = [...placements.keys()].filter((id) => isReserve(byId.get(id)));

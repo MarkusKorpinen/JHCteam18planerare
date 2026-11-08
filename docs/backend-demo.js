@@ -1,7 +1,7 @@
 // Demoläge: påhittade spelare som bara sparas i den här webbläsaren. Ingen inloggning, ingen databas.
-import { playersFromCsv } from './lib/csv.js?v=20261108c';
-import { runSync } from './lib/schedule.js?v=20261108c';
-import { newRound, ACTIONS, addLog, snapshot } from './lib/rounds.js?v=20261108c';
+import { playersFromCsv } from './lib/csv.js?v=20261108d';
+import { runSync } from './lib/schedule.js?v=20261108d';
+import { newRound, ACTIONS, addLog, snapshot } from './lib/rounds.js?v=20261108d';
 
 const KEY = 'jhc-planerare-demo-7';
 const FIRST = ['Alva', 'Bo', 'Cleo', 'Dante', 'Ebbe', 'Freja', 'Gustav', 'Hedda', 'Isak', 'Juni', 'Kasper', 'Lova', 'Malte', 'Nova', 'Otto', 'Penny', 'Rasmus', 'Saga', 'Tage', 'Ugo', 'Vera', 'Wilmer', 'Ylva', 'Ziggy', 'Alvin', 'Bianca', 'Colin', 'Disa', 'Elton', 'Fanny', 'Gry', 'Hjalmar', 'Ines', 'Jack', 'Kim', 'Leon', 'Majken', 'Nils', 'Olle', 'Pim', 'Rut', 'Sigge'];
