@@ -319,3 +319,10 @@ fieldset { min-width: 0; }
 
 .who .viewas { font: inherit; font-size: .78rem; padding: 1px 4px; border-radius: 6px; max-width: 150px; }
 .demobar .btn.small { margin-left: 8px; padding: 2px 8px; }
+
+/* Bekräftad målvakt */
+.gwrap { display: inline-flex; align-items: center; gap: 4px; }
+.gconf { font: inherit; font-size: .74rem; border: 1px dashed #9aa4b2; background: #fff; color: #5b6573; border-radius: 99px; padding: 3px 8px; cursor: pointer; white-space: nowrap; }
+.gconf.on { border: 1px solid #1e8e4f; background: #e6f6ec; color: #136b3a; font-weight: 600; }
+.gconf.static { cursor: default; margin-left: 6px; }
+@media print { .gconf { display: none; } }

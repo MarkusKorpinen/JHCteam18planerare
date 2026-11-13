@@ -1,14 +1,14 @@
 // Järfälla HC Team 2018 – gränssnitt. Koden innehåller ingen spelardata; den hämtas efter inloggning.
-import { CONFIG } from './config.js?v=20261108d';
-import { createSupabaseBackend } from './backend-supabase.js?v=20261108d';
-import { createDemoBackend } from './backend-demo.js?v=20261108d';
-import { RULES, isReserve, rosterText } from './lib/planner.js?v=20261108d';
-import { playersFromCsv } from './lib/csv.js?v=20261108d';
-import { runSync } from './lib/schedule.js?v=20261108d';
-import { ACTIONS, ALLOWED_WHEN_CONFIRMED, newRound, addLog, snapshot, view, pendingReview, teamName } from './lib/rounds.js?v=20261108d';
-import { ARENAS, DEFAULT_TEXTS, arenaFor, buildMatches, assignJerseys, resolveColors, clubOf, isOurs, colorLabel, colorHex, rinkSvg } from './lib/invite.js?v=20261108d';
-import { DEMO_ROLES } from './backend-demo.js?v=20261108d';
-import { mergeCustom, customKey, addMinutes, OUR_COLORS } from './lib/custom.js?v=20261108d';
+import { CONFIG } from './config.js?v=20261113a';
+import { createSupabaseBackend } from './backend-supabase.js?v=20261113a';
+import { createDemoBackend } from './backend-demo.js?v=20261113a';
+import { RULES, isReserve, rosterText } from './lib/planner.js?v=20261113a';
+import { playersFromCsv } from './lib/csv.js?v=20261113a';
+import { runSync } from './lib/schedule.js?v=20261113a';
+import { ACTIONS, ALLOWED_WHEN_CONFIRMED, newRound, addLog, snapshot, view, pendingReview, teamName } from './lib/rounds.js?v=20261113a';
+import { ARENAS, DEFAULT_TEXTS, arenaFor, buildMatches, assignJerseys, resolveColors, clubOf, isOurs, colorLabel, colorHex, rinkSvg } from './lib/invite.js?v=20261113a';
+import { DEMO_ROLES } from './backend-demo.js?v=20261113a';
+import { mergeCustom, customKey, addMinutes, OUR_COLORS } from './lib/custom.js?v=20261113a';
 
 const $ = (s, el = document) => el.querySelector(s);
 const app = $('#app');
@@ -468,7 +468,7 @@ function teamCard(key) {
       </div>
       ${v.filter((x) => x.level !== 'review').map((x) => `<div class="warnline ${x.level}">${esc(x.text)}</div>`).join('')}
       <h4>Målvakt</h4>
-      <div class="chips drop" data-drop-key="${esc(key)}" data-drop-role="G">${t.goalies.map((id) => chip(id, key)).join('') || '<span class="empty">Ingen målvakt</span>'}</div>
+      <div class="chips drop" data-drop-key="${esc(key)}" data-drop-role="G">${t.goalies.map((id) => { const ok = (t.goalieOk || []).includes(id); return `<span class="gwrap">${chip(id, key)}<button class="gconf${ok ? ' on' : ''}" data-act="goalieok" data-pid="${id}" data-key="${esc(key)}" aria-pressed="${ok}" title="${ok ? 'Har bekräftat att hen står i mål. Tryck för att ångra.' : 'Markera att målvakten har bekräftat'}">${ok ? '✓ Bekräftad' : 'Bekräfta'}</button></span>`; }).join('') || '<span class="empty">Ingen målvakt</span>'}</div>
       ${t.lines.map((l, i) => `<h4>Kedja ${i + 1} <span class="muted small">(${l.length})</span></h4><div class="chips drop" data-drop-key="${esc(key)}" data-drop-role="S" data-drop-line="${i}">${l.map((id) => chip(id, key)).join('')}</div>`).join('') || '<h4>Utespelare</h4><span class="empty">Inga utespelare</span>'}
       ${r.status !== 'fastställt' ? `<div class="chips drop newline" data-drop-key="${esc(key)}" data-drop-role="S" data-drop-line="new">Släpp här för ny kedja</div>` : ''}
       <h4>Tränare</h4>
@@ -508,7 +508,7 @@ function renderRoundReadOnly() {
       <div class="cardbody">
         <div class="pool small"><div><strong>${esc(u?.venue || '')}</strong>${u?.host ? ` · arrangör ${esc(u.host)}` : ''}</div>
         <ul class="matches">${(u?.matches || []).map((m) => `<li class="${m.missing ? 'missing' : ''}"><span class="time">${esc(m.start || 'tid ej satt')}</span> mot ${esc(opponent(u, m))}</li>`).join('')}</ul></div>
-        <h4>Målvakt</h4><div class="namelist">${(t.goalies || []).map((id) => `<div>${name(id)}</div>`).join('') || '<div class="muted">–</div>'}</div>
+        <h4>Målvakt</h4><div class="namelist">${(t.goalies || []).map((id) => `<div>${name(id)} ${(t.goalieOk || []).includes(id) ? '<span class="gconf on static">✓ Bekräftad</span>' : '<span class="gconf static">Ej bekräftad</span>'}</div>`).join('') || '<div class="muted">–</div>'}</div>
         <h4>Utespelare</h4><div class="namelist">${(t.skaters || []).map((id) => `<div>${name(id)}</div>`).join('') || '<div class="muted">–</div>'}</div>
         <h4>Tränare</h4><div class="namelist">${(t.coaches || []).map((id) => `<div>${esc(C(id)?.name || '')}</div>`).join('') || '<div class="muted">–</div>'}</div>
         ${draft ? '' : `<div class="row cardactions"><button class="btn" data-act="copyteam" data-key="${esc(key)}">Kopiera laglista</button><a class="btn" href="#/utskrift/${r.id}/${encodeURIComponent(key)}">Laglista som PDF</a></div>`}
@@ -1645,6 +1645,7 @@ document.addEventListener('click', async (e) => {
         const round = await B.createRound(newRound(name, keys, S.state.settings.roundDefaults, ctx()));
         await refreshState(); location.hash = `#/omgang/${round.id}`; break;
       }
+      case 'goalieok': await act('goalieOk', { key: d.key, pid: d.pid, ok: !(S.round.teams[d.key]?.goalieOk || []).includes(d.pid) }); break;
       case 'noticeseen': await markSeen(); renderNotices(false); break;
       case 'ce-del': S.ce.read(); S.ce.matches.splice(Number(d.i), 1); S.ce.render(); break;
       case 'ce-roundrobin': {

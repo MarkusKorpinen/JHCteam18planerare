@@ -1,7 +1,7 @@
 // Demoläge: påhittade spelare som bara sparas i den här webbläsaren. Ingen inloggning, ingen databas.
-import { playersFromCsv } from './lib/csv.js?v=20261108d';
-import { runSync } from './lib/schedule.js?v=20261108d';
-import { newRound, ACTIONS, addLog, snapshot } from './lib/rounds.js?v=20261108d';
+import { playersFromCsv } from './lib/csv.js?v=20261113a';
+import { runSync } from './lib/schedule.js?v=20261113a';
+import { newRound, ACTIONS, addLog, snapshot } from './lib/rounds.js?v=20261113a';
 
 const KEY = 'jhc-planerare-demo-7';
 const FIRST = ['Alva', 'Bo', 'Cleo', 'Dante', 'Ebbe', 'Freja', 'Gustav', 'Hedda', 'Isak', 'Juni', 'Kasper', 'Lova', 'Malte', 'Nova', 'Otto', 'Penny', 'Rasmus', 'Saga', 'Tage', 'Ugo', 'Vera', 'Wilmer', 'Ylva', 'Ziggy', 'Alvin', 'Bianca', 'Colin', 'Disa', 'Elton', 'Fanny', 'Gry', 'Hjalmar', 'Ines', 'Jack', 'Kim', 'Leon', 'Majken', 'Nils', 'Olle', 'Pim', 'Rut', 'Sigge'];
@@ -141,7 +141,7 @@ export function createDemoBackend({ source = 'demo/schedule.json' } = {}) {
       const nm = (x) => db.players.find((p) => p.id === x)?.name || '';
       const sortN = (a) => [...new Set(a)].sort((x, y) => nm(x).localeCompare(nm(y), 'sv'));
       return { id: r.id, name: r.name, status: r.status, version: r.version, keys: r.keys, updatedAt: r.updatedAt, updatedByName: r.updatedByName, confirmedAt: r.confirmedAt, confirmedBy: r.confirmedBy,
-        teams: Object.fromEntries(Object.entries(r.teams).map(([k, t]) => [k, { goalies: sortN(t.goalies || []), skaters: sortN((t.lines || []).flat()), coaches: t.coaches || [] }])) };
+        teams: Object.fromEntries(Object.entries(r.teams).map(([k, t]) => [k, { goalies: sortN(t.goalies || []), goalieOk: (t.goalieOk || []).filter((x) => (t.goalies || []).includes(x)), skaters: sortN((t.lines || []).flat()), coaches: t.coaches || [] }])) };
     },
     async getRound(id) { return { ...clone(findRound(id)), comments: clone(db.comments.filter((c) => c.roundId === id)) }; },
     async getRoundVersion(id) { const r = findRound(id); return { version: r.version, updatedAt: r.updatedAt, updatedByName: r.updatedByName, last: r.log?.[0] }; },

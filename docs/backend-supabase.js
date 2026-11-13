@@ -204,7 +204,7 @@ export function createSupabaseBackend({ url, anonKey }) {
     async getLeaderRound(id) {
       let rows;
       try { rows = await rpc('leader_rounds', { p_id: id }); }
-      catch { const r = await this.getRound(id); return { ...r, teams: Object.fromEntries(Object.entries(r.teams || {}).map(([k, t]) => [k, { goalies: t.goalies || [], skaters: (t.lines || []).flat(), coaches: t.coaches || [] }])) }; }
+      catch { const r = await this.getRound(id); return { ...r, teams: Object.fromEntries(Object.entries(r.teams || {}).map(([k, t]) => [k, { goalies: t.goalies || [], goalieOk: t.goalieOk || [], skaters: (t.lines || []).flat(), coaches: t.coaches || [] }])) }; }
       if (!rows?.length) throw new AppError('Omgången finns inte.');
       const r = rows[0];
       return { id: r.id, name: r.name, status: r.status, version: r.version, keys: r.keys || [], teams: r.teams || {},
