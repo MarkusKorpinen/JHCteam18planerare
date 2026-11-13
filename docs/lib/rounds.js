@@ -1,7 +1,7 @@
 // Ändringar på en omgång. Körs i webbläsaren; databasen kontrollerar versionen när de sparas.
 // En omgång: { id, name, status, version, keys, settings, teams: {key: {goalies, lines}}, locks, log, lastSeed }
 // ctx: { uppdrag, players, availability, levels, history, teamPrefix, me }
-import { propose, validate, rosterText, DEFAULT_ROUND_SETTINGS, isReserve } from './planner.js?v=20261108d';
+import { propose, validate, rosterText, DEFAULT_ROUND_SETTINGS, isReserve } from './planner.js?v=20261113a';
 
 const fail = (msg) => { throw new Error(msg); };
 export const emptyTeam = () => ({ goalies: [], lines: [] });
@@ -28,6 +28,7 @@ export function addLog(r, me, text) {
 
 function removeFrom(team, pid) {
   team.goalies = team.goalies.filter((x) => x !== pid);
+  if (team.goalieOk) team.goalieOk = team.goalieOk.filter((x) => x !== pid);
   team.lines = team.lines.map((l) => l.filter((x) => x !== pid)).filter((l) => l.length);
 }
 const roleOf = (team, pid) => (team?.goalies.includes(pid) ? 'G' : team?.lines.some((l) => l.includes(pid)) ? 'S' : null);
@@ -43,7 +44,11 @@ export const ACTIONS = {
       coaches: ctx.coaches || [], coachAvailability: ctx.coachAvailability || {}, coachLocks: r.coachLocks || [],
       levels: ctx.levels, history: (ctx.history || []).filter((h) => h.roundId !== r.id), seed,
     });
-    for (const k of r.keys) r.teams[k] = { ...(r.teams[k] || {}), goalies: res.teams[k].goalies, lines: res.teams[k].lines, coaches: res.teams[k].coaches };
+    for (const k of r.keys) {
+      const old = r.teams[k] || {};
+      r.teams[k] = { ...old, goalies: res.teams[k].goalies, lines: res.teams[k].lines, coaches: res.teams[k].coaches,
+        goalieOk: (old.goalieOk || []).filter((id) => res.teams[k].goalies.includes(id)) };
+    }
     r.lastSeed = seed;
     return 'skapade ett nytt förslag';
   },
@@ -89,12 +94,24 @@ export const ACTIONS = {
     if (t.goalies.includes(b.inPid) || t.lines.some((l) => l.includes(b.inPid))) fail(`${inName} är redan med i laget.`);
     let role = null;
     const gi = t.goalies.indexOf(b.outPid);
-    if (gi >= 0) { t.goalies[gi] = b.inPid; role = 'G'; }
+    if (gi >= 0) { t.goalies[gi] = b.inPid; role = 'G'; if (t.goalieOk) t.goalieOk = t.goalieOk.filter((x) => x !== b.outPid); }
     else for (const l of t.lines) { const i = l.indexOf(b.outPid); if (i >= 0) { l[i] = b.inPid; role = 'S'; break; } }
     if (!role) fail(`${outName} är inte med i laget.`);
     r.locks = r.locks.filter((l) => !(l.pid === b.outPid && l.key === b.key));
     r.locks.push({ pid: b.inPid, key: b.key, role });
     return `kallade in ${inName} i stället för ${outName} i ${label(ctx, b.key)}`;
+  },
+  // Målvakten har bekräftat att hen kommer och står i mål. En bekräftad målvakt låses så att nytt förslag inte flyttar hen.
+  goalieOk(r, b, ctx) {
+    const name = playerName(ctx, b.pid);
+    const t = r.teams[b.key] || fail('Okänt lag.');
+    if (!t.goalies.includes(b.pid)) fail(`${name} är inte målvakt i laget.`);
+    t.goalieOk = (t.goalieOk || []).filter((x) => x !== b.pid);
+    if (b.ok) {
+      t.goalieOk.push(b.pid);
+      if (!r.locks.some((l) => l.pid === b.pid && l.key === b.key)) r.locks.push({ pid: b.pid, key: b.key, role: 'G' });
+    }
+    return `${b.ok ? 'markerade' : 'tog bort markeringen'} att ${name} har bekräftat som målvakt i ${label(ctx, b.key)}`;
   },
   lock(r, b, ctx) {
     const name = playerName(ctx, b.pid);
@@ -139,7 +156,7 @@ export const ACTIONS = {
   confirm(r) { r.status = 'fastställt'; return 'fastställde omgången'; },
   reopen(r) { r.status = 'utkast'; return 'öppnade omgången igen som utkast'; },
 };
-export const ALLOWED_WHEN_CONFIRMED = new Set(['reopen', 'rename']);
+export const ALLOWED_WHEN_CONFIRMED = new Set(['reopen', 'rename', 'goalieOk']);
 
 export const teamName = (ctx, key) => `${ctx.teamPrefix || ''} ${ctx.uppdrag[key]?.label || ''}`.trim();
 
