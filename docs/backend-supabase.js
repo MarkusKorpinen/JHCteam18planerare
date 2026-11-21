@@ -116,7 +116,7 @@ export function createSupabaseBackend({ url, anonKey }) {
       const roundsQ = opts.planner
         ? rest('GET', 'rounds?select=id,name,status,version,created_at,updated_at,updated_by_name,confirmed_at,keys:data->keys&order=created_at.desc')
         : rpc('leader_rounds', { p_id: null }).catch(() => rest('GET', 'rounds?select=id,name,status,version,created_at,updated_at,updated_by_name,confirmed_at,keys:data->keys&order=created_at.desc'));
-      const [settings, players, avail, schedule, changes, rounds, history, coaches, cavail, levels, teamColors, clubs, homeEvents, invitations, routines, categories, customEvents, seen] = await Promise.all([
+      const [settings, players, avail, schedule, changes, rounds, history, coaches, cavail, levels, teamColors, clubs, homeEvents, invitations, routines, categories, customEvents, seen, roundEvents, tasks, leaderNames] = await Promise.all([
         rest('GET', 'settings?select=data&id=eq.1'),
         rest('GET', 'players?select=*&order=name'),
         rest('GET', 'availability?select=uppdrag_key,player_id'),
@@ -135,6 +135,9 @@ export function createSupabaseBackend({ url, anonKey }) {
         rest('GET', 'routine_categories?select=*&order=sort,name'),
         rest('GET', 'custom_events?select=*&order=date').catch(() => []),
         rest('GET', 'notice_seen?select=seen_at').catch(() => null),
+        opts.planner ? rest('GET', 'round_events?select=*&order=at.desc&limit=100').catch(() => []) : [],
+        rest('GET', 'tasks?select=*&order=created_at.desc').catch(() => null),
+        rpc('leader_names', {}).catch(() => []),
       ]);
       const levelOf = new Map(levels.map((l) => [l.player_id, l.level]));
       const coachAvailability = {};
@@ -151,6 +154,7 @@ export function createSupabaseBackend({ url, anonKey }) {
         routineCategories: categories,
         customEvents: customEvents.map((e) => ({ id: e.id, date: e.date, venue: e.venue, title: e.title, data: e.data || {}, updatedAt: e.updated_at, updatedByName: e.updated_by_name })),
         coaches: coaches.map((c) => ({ id: c.id, name: c.name, active: c.active, squad: c.squad || 'ordinarie', children: c.children || [] })),
+        roundEvents, tasks, leaderNames,
         schedule: schedule[0] || { uppdrag: {} }, changes, noticesSeenAt: seen ? (seen[0]?.seen_at || null) : undefined,
         rounds: rounds.map((r) => ({ id: r.id, name: r.name, status: r.status, keys: r.keys || [], createdAt: r.created_at, updatedAt: r.updated_at, updatedByName: r.updated_by_name, confirmedAt: r.confirmed_at })),
         history: history.map((h) => ({ roundId: h.round_id, roundName: h.round_name, confirmedAt: h.confirmed_at, teams: h.data.teams || [] })),
@@ -201,10 +205,18 @@ export function createSupabaseBackend({ url, anonKey }) {
       const [row] = await rest('POST', 'rounds', { name: r.name, data: roundData(r) }, 'return=representation');
       return mapRound(row);
     },
+    setGoalie: (id, key, pid, state, text) => rpc('set_goalie', { p_round: id, p_key: key, p_player: pid || null, p_state: state, p_text: text }),
+    async saveTask(t) {
+      const body = { title: t.title, details: t.details || '', responsible: t.responsible || null, deadline: t.deadline || null, done: !!t.done };
+      const rows = t.id ? await rest('PATCH', `tasks?id=eq.${t.id}`, body, 'return=representation') : await rest('POST', 'tasks', body, 'return=representation');
+      if (!rows?.length) throw new AppError('Ärendet kunde inte sparas.');
+      return rows[0];
+    },
+    deleteTask: (id) => rest('DELETE', `tasks?id=eq.${id}`),
     async getLeaderRound(id) {
       let rows;
       try { rows = await rpc('leader_rounds', { p_id: id }); }
-      catch { const r = await this.getRound(id); return { ...r, teams: Object.fromEntries(Object.entries(r.teams || {}).map(([k, t]) => [k, { goalies: t.goalies || [], goalieOk: t.goalieOk || [], skaters: (t.lines || []).flat(), coaches: t.coaches || [] }])) }; }
+      catch { const r = await this.getRound(id); return { ...r, teams: Object.fromEntries(Object.entries(r.teams || {}).map(([k, t]) => [k, { goalies: t.goalies || [], goalieOk: t.goalieOk || [], goalieNone: t.goalieNone || null, skaters: (t.lines || []).flat(), coaches: t.coaches || [] }])) }; }
       if (!rows?.length) throw new AppError('Omgången finns inte.');
       const r = rows[0];
       return { id: r.id, name: r.name, status: r.status, version: r.version, keys: r.keys || [], teams: r.teams || {},
@@ -291,7 +303,7 @@ export function createSupabaseBackend({ url, anonKey }) {
     setMyName: (name) => rpc('set_my_name', { p_name: name }),
     saveSettings: (data, rename) => rpc('save_settings', { p_data: data, p_rename: rename || {} }),
     async exportAll() {
-      const tables = ['settings', 'players', 'player_levels', 'coaches', 'coach_availability', 'availability', 'schedule', 'schedule_changes', 'rounds', 'history', 'comments', 'routine_categories', 'routines', 'routine_versions', 'team_colors', 'clubs', 'home_events', 'custom_events', 'invitations', 'leaders'];
+      const tables = ['settings', 'players', 'player_levels', 'coaches', 'coach_availability', 'availability', 'schedule', 'schedule_changes', 'rounds', 'history', 'comments', 'routine_categories', 'routines', 'routine_versions', 'team_colors', 'clubs', 'home_events', 'custom_events', 'invitations', 'leaders', 'tasks', 'round_events'];
       const out = { exportedAt: new Date().toISOString() };
       for (const t of tables) out[t] = await rest('GET', `${t}?select=*`).catch(() => null);
       return out;

@@ -326,3 +326,33 @@ fieldset { min-width: 0; }
 .gconf.on { border: 1px solid #1e8e4f; background: #e6f6ec; color: #136b3a; font-weight: 600; }
 .gconf.static { cursor: default; margin-left: 6px; }
 @media print { .gconf { display: none; } }
+
+/* Målvaktssvar */
+.goaliebox { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
+.grow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.grow > span:first-child { font-weight: 600; }
+.gnone { background: #fdecee; border: 1px solid #f0b4bc; color: #8a1c2b; border-radius: 8px; padding: 6px 10px; font-weight: 600; font-size: .9rem; margin: 4px 0; }
+.goaliemore summary { cursor: pointer; color: var(--muted, #5b6573); }
+.goaliemore .stack { margin-top: 6px; gap: 8px; }
+.goaliemore select { max-width: 220px; }
+/* Aktivitetstavla */
+.tabcount { background: #e0263c; color: #fff; font-size: .68rem; font-weight: 700; border-radius: 99px; padding: 1px 6px; margin-left: 4px; vertical-align: 1px; }
+.filters { gap: 6px; margin: 6px 0 10px; }
+.chipbtn { font: inherit; font-size: .85rem; border: 1px solid #cdd3dc; background: #fff; border-radius: 99px; padding: 4px 12px; cursor: pointer; }
+.chipbtn.on { background: var(--ink, #1b2430); color: #fff; border-color: transparent; }
+.chipbtn .n { opacity: .7; margin-left: 2px; }
+.tasks { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; }
+.task { display: flex; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line, #e3e7ed); align-items: flex-start; }
+.task:last-child { border-bottom: 0; }
+.taskcheck { flex: none; width: 26px; height: 26px; border-radius: 50%; border: 2px solid #9aa4b2; background: #fff; cursor: pointer; color: #fff; font-weight: 700; line-height: 1; margin-top: 1px; }
+.taskcheck:hover { border-color: #1e8e4f; }
+.taskcheck.on { background: #1e8e4f; border-color: #1e8e4f; }
+.taskbody { flex: 1; min-width: 0; }
+.tasktitle { font: inherit; font-weight: 600; background: none; border: 0; padding: 0; text-align: left; cursor: pointer; color: inherit; }
+.tasktitle:hover { text-decoration: underline; }
+.task.done .tasktitle { text-decoration: line-through; color: #6b7583; }
+.taskdetails { white-space: pre-wrap; margin: 2px 0; color: #3b4552; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.taskmeta { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 2px; }
+.noresp { color: #a15c00; }
+.deadline.late { color: #c4162a; font-weight: 700; }
+.deadline.soon { color: #a15c00; font-weight: 600; }

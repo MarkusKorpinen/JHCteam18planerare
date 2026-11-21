@@ -1,7 +1,8 @@
 // Ändringar på en omgång. Körs i webbläsaren; databasen kontrollerar versionen när de sparas.
 // En omgång: { id, name, status, version, keys, settings, teams: {key: {goalies, lines}}, locks, log, lastSeed }
 // ctx: { uppdrag, players, availability, levels, history, teamPrefix, me }
-import { propose, validate, rosterText, DEFAULT_ROUND_SETTINGS, isReserve } from './planner.js?v=20261113a';
+import { propose, validate, rosterText, DEFAULT_ROUND_SETTINGS, isReserve } from './planner.js?v=20261121a';
+import { applyGoalie } from './goalie.js?v=20261121a';
 
 const fail = (msg) => { throw new Error(msg); };
 export const emptyTeam = () => ({ goalies: [], lines: [] });
@@ -106,12 +107,13 @@ export const ACTIONS = {
     const name = playerName(ctx, b.pid);
     const t = r.teams[b.key] || fail('Okänt lag.');
     if (!t.goalies.includes(b.pid)) fail(`${name} är inte målvakt i laget.`);
-    t.goalieOk = (t.goalieOk || []).filter((x) => x !== b.pid);
-    if (b.ok) {
-      t.goalieOk.push(b.pid);
-      if (!r.locks.some((l) => l.pid === b.pid && l.key === b.key)) r.locks.push({ pid: b.pid, key: b.key, role: 'G' });
-    }
+    applyGoalie(r, b.key, b.pid, b.ok ? 'ok' : 'unok', ctx.me);
     return `${b.ok ? 'markerade' : 'tog bort markeringen'} att ${name} har bekräftat som målvakt i ${label(ctx, b.key)}`;
+  },
+  // Ingen i laget har accepterat att stå i mål (eller ta bort den markeringen)
+  goalieNone(r, b, ctx) {
+    applyGoalie(r, b.key, null, b.none ? 'none' : 'clear', ctx.me);
+    return b.none ? `markerade att ingen har accepterat att stå i mål i ${label(ctx, b.key)}` : `tog bort ”ingen målvakt” i ${label(ctx, b.key)}`;
   },
   lock(r, b, ctx) {
     const name = playerName(ctx, b.pid);
@@ -156,7 +158,7 @@ export const ACTIONS = {
   confirm(r) { r.status = 'fastställt'; return 'fastställde omgången'; },
   reopen(r) { r.status = 'utkast'; return 'öppnade omgången igen som utkast'; },
 };
-export const ALLOWED_WHEN_CONFIRMED = new Set(['reopen', 'rename', 'goalieOk']);
+export const ALLOWED_WHEN_CONFIRMED = new Set(['reopen', 'rename', 'goalieOk', 'goalieNone']);
 
 export const teamName = (ctx, key) => `${ctx.teamPrefix || ''} ${ctx.uppdrag[key]?.label || ''}`.trim();
 

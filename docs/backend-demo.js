@@ -1,7 +1,8 @@
 // Demoläge: påhittade spelare som bara sparas i den här webbläsaren. Ingen inloggning, ingen databas.
-import { playersFromCsv } from './lib/csv.js?v=20261113a';
-import { runSync } from './lib/schedule.js?v=20261113a';
-import { newRound, ACTIONS, addLog, snapshot } from './lib/rounds.js?v=20261113a';
+import { playersFromCsv } from './lib/csv.js?v=20261121a';
+import { runSync } from './lib/schedule.js?v=20261121a';
+import { newRound, ACTIONS, addLog, snapshot } from './lib/rounds.js?v=20261121a';
+import { applyGoalie } from './lib/goalie.js?v=20261121a';
 
 const KEY = 'jhc-planerare-demo-7';
 const FIRST = ['Alva', 'Bo', 'Cleo', 'Dante', 'Ebbe', 'Freja', 'Gustav', 'Hedda', 'Isak', 'Juni', 'Kasper', 'Lova', 'Malte', 'Nova', 'Otto', 'Penny', 'Rasmus', 'Saga', 'Tage', 'Ugo', 'Vera', 'Wilmer', 'Ylva', 'Ziggy', 'Alvin', 'Bianca', 'Colin', 'Disa', 'Elton', 'Fanny', 'Gry', 'Hjalmar', 'Ines', 'Jack', 'Kim', 'Leon', 'Majken', 'Nils', 'Olle', 'Pim', 'Rut', 'Sigge'];
@@ -110,6 +111,9 @@ export function createDemoBackend({ source = 'demo/schedule.json' } = {}) {
         changes: clone(db.changes), noticesSeenAt: db.noticesSeenAt || null,
         rounds: db.rounds.map((r) => ({ id: r.id, name: r.name, status: r.status, keys: r.keys, createdAt: r.createdAt, updatedAt: r.updatedAt, updatedByName: r.updatedByName, confirmedAt: r.confirmedAt })),
         history: plan ? clone(db.history) : [],
+        roundEvents: plan ? clone(db.roundEvents || []) : [],
+        tasks: clone(db.tasks || []),
+        leaderNames: [{ id: 'demo', name: ME.name }, { id: 'l-tina', name: 'Tina Lagledare' }, { id: 'l-lisa', name: 'Lisa Ledare' }, { id: 'l-omar', name: 'Omar Ledare' }],
       };
     },
     async addPlayer(p) { const x = { id: uuid(), name: p.name, level: p.level, canGoalie: !!p.canGoalie, squad: p.squad === 'reserv' ? 'reserv' : 'ordinarie', active: true }; db.players.push(x); save(); return x; },
@@ -141,7 +145,7 @@ export function createDemoBackend({ source = 'demo/schedule.json' } = {}) {
       const nm = (x) => db.players.find((p) => p.id === x)?.name || '';
       const sortN = (a) => [...new Set(a)].sort((x, y) => nm(x).localeCompare(nm(y), 'sv'));
       return { id: r.id, name: r.name, status: r.status, version: r.version, keys: r.keys, updatedAt: r.updatedAt, updatedByName: r.updatedByName, confirmedAt: r.confirmedAt, confirmedBy: r.confirmedBy,
-        teams: Object.fromEntries(Object.entries(r.teams).map(([k, t]) => [k, { goalies: sortN(t.goalies || []), goalieOk: (t.goalieOk || []).filter((x) => (t.goalies || []).includes(x)), skaters: sortN((t.lines || []).flat()), coaches: t.coaches || [] }])) };
+        teams: Object.fromEntries(Object.entries(r.teams).map(([k, t]) => [k, { goalies: sortN(t.goalies || []), goalieOk: (t.goalieOk || []).filter((x) => (t.goalies || []).includes(x)), goalieNone: t.goalieNone || null, skaters: sortN((t.lines || []).flat()), coaches: t.coaches || [] }])) };
     },
     async getRound(id) { return { ...clone(findRound(id)), comments: clone(db.comments.filter((c) => c.roundId === id)) }; },
     async getRoundVersion(id) { const r = findRound(id); return { version: r.version, updatedAt: r.updatedAt, updatedByName: r.updatedByName, last: r.log?.[0] }; },
@@ -157,6 +161,26 @@ export function createDemoBackend({ source = 'demo/schedule.json' } = {}) {
       db.rounds[i] = x; save();
       return clone(x);
     },
+    async setGoalie(id, key, pid, state, text) {
+      const r = findRound(id);
+      applyGoalie(r, key, pid, state, ME);
+      stamp(r, text);
+      if (state === 'ok') for (const h of db.history) if (h.roundId === id) for (const t of h.teams) if (t.key === key) { t.goalies = [...r.teams[key].goalies]; t.lines = r.teams[key].lines.map((l) => [...l]); }
+      db.roundEvents = [{ id: uuid(), at: now(), round_id: id, round_name: r.name, team_key: key, kind: state, player_id: pid, by_name: ME.name, text }, ...(db.roundEvents || [])].slice(0, 100);
+      save();
+    },
+    async saveTask(t) {
+      db.tasks ||= [];
+      const names = { demo: ME.name, 'l-tina': 'Tina Lagledare', 'l-lisa': 'Lisa Ledare', 'l-omar': 'Omar Ledare' };
+      const old = t.id ? db.tasks.find((x) => x.id === t.id) : null;
+      const x = { ...(old || { id: uuid(), created_at: now(), created_by_name: ME.name }), title: t.title, details: t.details || '', responsible: t.responsible || null,
+        responsible_name: t.responsible ? names[t.responsible] || '' : null, deadline: t.deadline || null, done: !!t.done, updated_at: now(), updated_by_name: ME.name };
+      if (x.done && !old?.done) { x.done_at = now(); x.done_by_name = ME.name; }
+      if (!x.done) { x.done_at = null; x.done_by_name = null; }
+      db.tasks = [...db.tasks.filter((y) => y.id !== x.id), x]; save();
+      return clone(x);
+    },
+    async deleteTask(id) { db.tasks = (db.tasks || []).filter((x) => x.id !== id); save(); },
     async deleteRound(id) { db.rounds = db.rounds.filter((r) => r.id !== id); save(); },
     async addComment(roundId, key, text) { db.comments.push({ id: uuid(), roundId, key, userId: ME.id, name: ME.name, text, at: now() }); save(); },
     async deleteComment(id) { db.comments = db.comments.filter((c) => c.id !== id); save(); },

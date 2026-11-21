@@ -1,14 +1,15 @@
 // Järfälla HC Team 2018 – gränssnitt. Koden innehåller ingen spelardata; den hämtas efter inloggning.
-import { CONFIG } from './config.js?v=20261113a';
-import { createSupabaseBackend } from './backend-supabase.js?v=20261113a';
-import { createDemoBackend } from './backend-demo.js?v=20261113a';
-import { RULES, isReserve, rosterText } from './lib/planner.js?v=20261113a';
-import { playersFromCsv } from './lib/csv.js?v=20261113a';
-import { runSync } from './lib/schedule.js?v=20261113a';
-import { ACTIONS, ALLOWED_WHEN_CONFIRMED, newRound, addLog, snapshot, view, pendingReview, teamName } from './lib/rounds.js?v=20261113a';
-import { ARENAS, DEFAULT_TEXTS, arenaFor, buildMatches, assignJerseys, resolveColors, clubOf, isOurs, colorLabel, colorHex, rinkSvg } from './lib/invite.js?v=20261113a';
-import { DEMO_ROLES } from './backend-demo.js?v=20261113a';
-import { mergeCustom, customKey, addMinutes, OUR_COLORS } from './lib/custom.js?v=20261113a';
+import { CONFIG } from './config.js?v=20261121a';
+import { createSupabaseBackend } from './backend-supabase.js?v=20261121a';
+import { createDemoBackend } from './backend-demo.js?v=20261121a';
+import { RULES, isReserve, rosterText } from './lib/planner.js?v=20261121a';
+import { playersFromCsv } from './lib/csv.js?v=20261121a';
+import { runSync } from './lib/schedule.js?v=20261121a';
+import { ACTIONS, ALLOWED_WHEN_CONFIRMED, newRound, addLog, snapshot, view, pendingReview, teamName } from './lib/rounds.js?v=20261121a';
+import { ARENAS, DEFAULT_TEXTS, arenaFor, buildMatches, assignJerseys, resolveColors, clubOf, isOurs, colorLabel, colorHex, rinkSvg } from './lib/invite.js?v=20261121a';
+import { DEMO_ROLES } from './backend-demo.js?v=20261121a';
+import { mergeCustom, customKey, addMinutes, OUR_COLORS } from './lib/custom.js?v=20261121a';
+import { goalieText } from './lib/goalie.js?v=20261121a';
 
 const $ = (s, el = document) => el.querySelector(s);
 const app = $('#app');
@@ -138,6 +139,7 @@ async function route() {
     const mi = h.match(/^\/matchinbjudan\/(.+?)(\/utskrift)?$/);
     const ce = h.match(/^\/eget\/([\w-]+)$/);
     if (h === '/notiser') { document.querySelectorAll('#tabs a').forEach((a) => a.classList.remove('on')); window.scrollTo(0, 0); return viewNotices(); }
+    renderTaskCount();
     let tab = m ? 'omgangar' : rt ? 'rutiner' : mi ? 'schema' : ce ? 'omgangar' : (h.slice(1) || 'omgangar');
     if (!planner && (tab === 'spelare' || tab === 'historik')) tab = 'omgangar';
     document.querySelectorAll('#tabs a').forEach((a) => a.classList.toggle('on', a.dataset.tab === tab));
@@ -146,7 +148,7 @@ async function route() {
     if (rt) return await (rt[1] === 'ny' ? editRoutine(null) : rt[2] === 'redigera' ? editRoutine(rt[1]) : rt[2] === 'utskrift' ? printRoutine(rt[1]) : viewRoutine(rt[1]));
     if (mi) return await viewInvitation(decodeURIComponent(mi[1]), !!mi[2]);
     if (ce) return editCustomEvent(ce[1] === 'ny' ? null : ce[1]);
-    await ({ omgangar: viewRounds, spelare: viewPlayers, schema: viewSchedule, historik: viewHistory, ledare: viewLeaders, rutiner: viewRoutines }[tab] || viewRounds)();
+    await ({ omgangar: viewRounds, spelare: viewPlayers, schema: viewSchedule, historik: viewHistory, ledare: viewLeaders, rutiner: viewRoutines, aktiviteter: viewTasks }[tab] || viewRounds)();
   } catch (e) {
     if (e.status === 401) { S.me = null; return viewLogin(e.message); }
     app.innerHTML = `<div class="alert error">${esc(e.message)}</div>`;
@@ -164,8 +166,12 @@ async function refreshState() {
 const NOTICE_DAYS = 30;
 function notices() {
   const yesterday = new Date(Date.parse(S.state.today + 'T12:00:00') - 864e5).toISOString().slice(0, 10);
-  return (S.state.changes || []).filter((c) => !c.is_new && Date.now() - Date.parse(c.at) < NOTICE_DAYS * 864e5
+  const recent = (c) => Date.now() - Date.parse(c.at) < NOTICE_DAYS * 864e5;
+  const sched = (S.state.changes || []).filter((c) => !c.is_new && recent(c)
     && (!c.date || c.date >= yesterday || (c.items || []).some((i) => /→ (\d{4}-\d{2}-\d{2})/.exec(i)?.[1] >= yesterday)));
+  // Målvaktssvar från ledarna (bara lagplanerare får dem)
+  const goalie = (S.state.roundEvents || []).filter((e) => recent(e) && !(e.by_user && e.by_user === S.me?.id)).map((e) => ({ ...e, goalieEvent: true }));
+  return [...sched, ...goalie].sort((a, b) => b.at.localeCompare(a.at));
 }
 function seenAt() {
   // Supabase sparar läst-tiden per person. Saknas tabellen (ingen migrering körd) används webbläsarens minne.
@@ -175,6 +181,13 @@ function seenAt() {
 const unread = () => { const s = seenAt(); return notices().filter((c) => !s || Date.parse(c.at) > Date.parse(s)); };
 const prettyItem = (t) => esc(t).replace(/\d{4}-\d{2}-\d{2}/g, (d) => fDate(d));
 function noticeText(c) {
+  if (c.goalieEvent) {
+    const u = U(c.team_key);
+    const bad = c.kind === 'none' || c.kind === 'unok';
+    return `<strong>${bad ? '⚠️ ' : '🥅 '}Målvakt · ${esc(u?.label || 'Lag')} ${esc(fDate(u?.date))}</strong>
+      <ul class="noticeitems"><li>${esc(c.by_name || 'En ledare')}: ${esc(c.text)}</li></ul>
+      ${c.round_id ? `<span class="small"><a href="#/omgang/${c.round_id}">Öppna ${esc(c.round_name || 'omgången')}</a></span>` : ''}`;
+  }
   const u = U(c.uppdrag_key);
   const label = c.label || u?.label || 'Poolspel';
   const where = u?.group ? ` · ${esc(u.group)}` : '';
@@ -189,7 +202,7 @@ function renderNotices(onPage) {
   cnt.hidden = !n.length; cnt.textContent = n.length;
   $('#bell').classList.toggle('has', !!n.length);
   $('#notices').innerHTML = onPage || !n.length ? '' : `<div class="alert notice">
-    <strong>${n.length === 1 ? 'Ändring i matchschemat' : `${n.length} ändringar i matchschemat`}</strong>
+    <strong>${n.every((c) => !c.goalieEvent) ? (n.length === 1 ? 'Ändring i matchschemat' : `${n.length} ändringar i matchschemat`) : (n.length === 1 ? 'Ny notis' : `${n.length} nya notiser`)}</strong>
     <ul class="noticelist">${n.slice(0, 3).map((c) => `<li>${noticeText(c)}</li>`).join('')}</ul>
     <div class="row">${n.length > 3 ? `<a class="btn small" href="#/notiser">Visa alla ${n.length}</a>` : '<a class="btn small" href="#/notiser">Visa notiser</a>'}<button class="btn small" data-act="noticeseen">Markera som lästa</button></div>
   </div>`;
@@ -205,7 +218,7 @@ function viewNotices() {
   const all = notices();
   app.innerHTML = `<section class="panel">
     <h2>Notiser</h2>
-    <p class="small muted">Ändrade matchtider, flyttade poolspel, ny hall och inställda matcher från swehockey (via matchsidan) de senaste ${NOTICE_DAYS} dagarna. Schemat kontrolleras flera gånger per dag.</p>
+    <p class="small muted">Ändrade matchtider, flyttade poolspel, ny hall och inställda matcher från swehockey (via matchsidan) de senaste ${NOTICE_DAYS} dagarna. Schemat kontrolleras flera gånger per dag.${S.me.planner ? ' Lagplanerare ser också ledarnas svar om målvakter.' : ''}</p>
     ${all.length ? `<ul class="noticelist big">${all.map((c) => `<li class="${!s || Date.parse(c.at) > Date.parse(s) ? 'unread' : ''}"><span class="small muted block">${fDT(c.at)}${!s || Date.parse(c.at) > Date.parse(s) ? ' <span class="badge new">Ny</span>' : ''}</span>${noticeText(c)}</li>`).join('')}</ul>` : '<p class="muted">Inga ändringar i matchschemat den senaste tiden.</p>'}
   </section>`;
   if (unread().length) markSeen().then(() => renderNotices(true));
@@ -445,7 +458,7 @@ function teamCard(key) {
   const dist = S.view.validation.levelDist[key] || {};
   const errors = v.filter((x) => x.level === 'error').length;
   const review = pendingReview(r, key, S.state.changes);
-  const status = review.length ? '<span class="badge review">Granska</span>' : errors ? '<span class="badge bad">Saknas</span>' : '<span class="badge ok">Klart</span>';
+  const status = review.length ? '<span class="badge review">Granska</span>' : t.goalieNone ? '<span class="badge bad">Målvakt saknas</span>' : errors ? '<span class="badge bad">Saknas</span>' : '<span class="badge ok">Klart</span>';
   return `
   <article class="card" style="--c:${teamColor(u)}">
     <header class="cardhead ${u?.color === 'vit' || u?.color === 'gul' ? 'light' : ''}">
@@ -468,7 +481,9 @@ function teamCard(key) {
       </div>
       ${v.filter((x) => x.level !== 'review').map((x) => `<div class="warnline ${x.level}">${esc(x.text)}</div>`).join('')}
       <h4>Målvakt</h4>
+      ${t.goalieNone ? `<div class="gnone">Ingen har accepterat att stå i mål <span class="small">(${esc(t.goalieNone.by || '')} ${fDT(t.goalieNone.at)})</span> <button class="linkbtn" data-act="pgoalienone" data-key="${esc(key)}" data-v="0">Ta bort markeringen</button></div>` : ''}
       <div class="chips drop" data-drop-key="${esc(key)}" data-drop-role="G">${t.goalies.map((id) => { const ok = (t.goalieOk || []).includes(id); return `<span class="gwrap">${chip(id, key)}<button class="gconf${ok ? ' on' : ''}" data-act="goalieok" data-pid="${id}" data-key="${esc(key)}" aria-pressed="${ok}" title="${ok ? 'Har bekräftat att hen står i mål. Tryck för att ångra.' : 'Markera att målvakten har bekräftat'}">${ok ? '✓ Bekräftad' : 'Bekräfta'}</button></span>`; }).join('') || '<span class="empty">Ingen målvakt</span>'}</div>
+      ${t.goalieNone ? '' : `<button class="linkbtn small" data-act="pgoalienone" data-key="${esc(key)}" data-v="1">Ingen har accepterat att stå i mål</button>`}
       ${t.lines.map((l, i) => `<h4>Kedja ${i + 1} <span class="muted small">(${l.length})</span></h4><div class="chips drop" data-drop-key="${esc(key)}" data-drop-role="S" data-drop-line="${i}">${l.map((id) => chip(id, key)).join('')}</div>`).join('') || '<h4>Utespelare</h4><span class="empty">Inga utespelare</span>'}
       ${r.status !== 'fastställt' ? `<div class="chips drop newline" data-drop-key="${esc(key)}" data-drop-role="S" data-drop-line="new">Släpp här för ny kedja</div>` : ''}
       <h4>Tränare</h4>
@@ -484,6 +499,42 @@ function teamCard(key) {
 
     </div>
   </article>`;
+}
+
+// Målvakt i ledarvyn: alla ledare kan svara för laget, och lagplanerarna får en notis.
+function goalieBox(key, t) {
+  const nm = (id) => esc(P(id)?.name || '');
+  const ok = t.goalieOk || [];
+  return `<div class="goaliebox">
+    ${(t.goalies || []).map((id) => `<div class="grow"><span>${nm(id)}</span>
+      ${ok.includes(id) ? '<span class="gconf on static">✓ Har accepterat</span>' : '<span class="gconf static">Ej bekräftad</span>'}
+      <button class="btn small" data-act="lgoalie" data-key="${esc(key)}" data-pid="${id}" data-state="${ok.includes(id) ? 'unok' : 'ok'}">${ok.includes(id) ? 'Ångra' : 'Har accepterat'}</button></div>`).join('') || '<div class="muted">Ingen målvakt uttagen</div>'}
+    ${t.goalieNone ? `<div class="gnone">Ingen har accepterat att stå i mål <span class="small">(${esc(t.goalieNone.by || '')} ${fDT(t.goalieNone.at)})</span>
+      <button class="linkbtn" data-act="lgoalie" data-key="${esc(key)}" data-state="clear">Ångra</button></div>` : ''}
+    <details class="goaliemore"><summary class="small">Någon annan har accepterat, eller ingen har gjort det</summary>
+      <div class="stack">
+        <label class="small">Någon annan i laget har accepterat att stå i mål
+          <span class="row"><select data-goalie-other="${esc(key)}"><option value="">Välj spelare</option>${(t.skaters || []).map((id) => `<option value="${id}">${nm(id)}</option>`).join('')}</select>
+          <button class="btn small" data-act="lgoalieother" data-key="${esc(key)}">Spara</button></span></label>
+        ${t.goalieNone ? '' : `<button class="btn small danger" data-act="lgoalie" data-key="${esc(key)}" data-state="none">Ingen har accepterat att stå i mål</button>`}
+        <p class="small muted">Lagplanerarna får en notis när du svarar.</p>
+      </div></details>
+  </div>`;
+}
+async function leaderGoalie(key, pid, state) {
+  const t = S.round.teams[key] || {}, u = U(key);
+  const pn = (id) => P(id)?.name || '';
+  const old = state === 'ok' && !(t.goalies || []).includes(pid) ? (t.goalies || []).filter((g) => !(t.goalieOk || []).includes(g)).sort()[0] || null : null;
+  const text = goalieText(state, pn(pid), `${u?.label || ''} ${fDate(u?.date)}`, old ? pn(old) : '');
+  if (state === 'none' && !(await askConfirm(`Markera att ingen i ${u?.label} har accepterat att stå i mål? Lagplanerarna får en notis.`))) return;
+  const fromSkater = state === 'ok' && !(t.goalies || []).includes(pid);
+  if (fromSkater && !(await askConfirm(`${pn(pid)} blir målvakt${old ? ` och ${pn(old)} blir utespelare` : ''} i ${u?.label}. Lagplanerarna får en notis.`))) return;
+  try {
+    await B.setGoalie(S.round.id, key, pid || null, state, text[0].toUpperCase() + text.slice(1));
+    S.round = await B.getLeaderRound(S.round.id);
+    renderRoundReadOnly();
+    toast('Sparat. Lagplanerarna får en notis.');
+  } catch (e) { toast(e.message, true); }
 }
 
 function renderRoundReadOnly() {
@@ -508,7 +559,7 @@ function renderRoundReadOnly() {
       <div class="cardbody">
         <div class="pool small"><div><strong>${esc(u?.venue || '')}</strong>${u?.host ? ` · arrangör ${esc(u.host)}` : ''}</div>
         <ul class="matches">${(u?.matches || []).map((m) => `<li class="${m.missing ? 'missing' : ''}"><span class="time">${esc(m.start || 'tid ej satt')}</span> mot ${esc(opponent(u, m))}</li>`).join('')}</ul></div>
-        <h4>Målvakt</h4><div class="namelist">${(t.goalies || []).map((id) => `<div>${name(id)} ${(t.goalieOk || []).includes(id) ? '<span class="gconf on static">✓ Bekräftad</span>' : '<span class="gconf static">Ej bekräftad</span>'}</div>`).join('') || '<div class="muted">–</div>'}</div>
+        <h4>Målvakt</h4>${goalieBox(key, t)}
         <h4>Utespelare</h4><div class="namelist">${(t.skaters || []).map((id) => `<div>${name(id)}</div>`).join('') || '<div class="muted">–</div>'}</div>
         <h4>Tränare</h4><div class="namelist">${(t.coaches || []).map((id) => `<div>${esc(C(id)?.name || '')}</div>`).join('') || '<div class="muted">–</div>'}</div>
         ${draft ? '' : `<div class="row cardactions"><button class="btn" data-act="copyteam" data-key="${esc(key)}">Kopiera laglista</button><a class="btn" href="#/utskrift/${r.id}/${encodeURIComponent(key)}">Laglista som PDF</a></div>`}
@@ -1319,6 +1370,89 @@ document.addEventListener('pointerup', async (e) => {
   await act('move', { pid, fromKey, toKey, role, line: line === undefined || line === 'new' ? null : Number(line) });
 });
 
+// ---------- aktivitetstavla ----------
+// Ärenden som alla ledare kan lägga in, ta ansvar för, sätta deadline på och klarmarkera.
+const myOpenTasks = () => (S.state?.tasks || []).filter((t) => !t.done && t.responsible && t.responsible === S.me?.id);
+function renderTaskCount() {
+  const el = $('#taskcount'); if (!el) return;
+  const n = myOpenTasks().length;
+  el.hidden = !n; el.textContent = n;
+}
+function deadlineInfo(t) {
+  if (!t.deadline) return '';
+  const days = Math.round((Date.parse(t.deadline + 'T12:00:00') - Date.parse(S.state.today + 'T12:00:00')) / 864e5);
+  const cls = t.done ? '' : days < 0 ? 'late' : days <= 3 ? 'soon' : '';
+  const extra = t.done ? '' : days < 0 ? ` · ${-days} dag${days === -1 ? '' : 'ar'} sen` : days === 0 ? ' · i dag' : days === 1 ? ' · i morgon' : days <= 3 ? ` · om ${days} dagar` : '';
+  return `<span class="deadline ${cls}">Deadline ${esc(fDate(t.deadline))}${extra}</span>`;
+}
+function taskItem(t) {
+  return `<li class="task${t.done ? ' done' : ''}">
+    <button class="taskcheck${t.done ? ' on' : ''}" data-act="taskdone" data-id="${t.id}" aria-label="${t.done ? 'Öppna igen' : 'Klarmarkera'}" title="${t.done ? 'Öppna igen' : 'Klarmarkera'}">${t.done ? '✓' : ''}</button>
+    <div class="taskbody">
+      <button class="tasktitle" data-act="taskedit" data-id="${t.id}">${esc(t.title)}</button>
+      ${t.details ? `<div class="taskdetails small">${esc(t.details)}</div>` : ''}
+      <div class="small muted taskmeta">
+        <span class="${t.responsible ? '' : 'noresp'}">${t.responsible ? `Ansvarig: <strong>${esc(t.responsible_name || '')}</strong>` : 'Ingen ansvarig'}</span>
+        ${deadlineInfo(t)}
+        <span>${t.done ? `Klar ${fDT(t.done_at)}${t.done_by_name ? ` av ${esc(t.done_by_name)}` : ''}` : `Inlagt av ${esc(t.created_by_name || '')} ${fDT(t.created_at)}`}</span>
+      </div>
+    </div></li>`;
+}
+function viewTasks() {
+  const all = S.state.tasks;
+  if (all === null) { app.innerHTML = '<div class="alert warn">Aktivitetstavlan är inte aktiverad i databasen ännu. Be administratören köra den senaste SQL-filen i Supabase.</div>'; return; }
+  const f = S.taskFilter || 'alla';
+  const open = (all || []).filter((t) => !t.done)
+    .filter((t) => (f === 'mina' ? t.responsible === S.me.id : f === 'ingen' ? !t.responsible : true))
+    .sort((a, b) => (a.deadline || '9999').localeCompare(b.deadline || '9999') || b.created_at.localeCompare(a.created_at));
+  const done = (all || []).filter((t) => t.done).sort((a, b) => (b.done_at || '').localeCompare(a.done_at || ''));
+  const cnt = { alla: (all || []).filter((t) => !t.done).length, mina: myOpenTasks().length, ingen: (all || []).filter((t) => !t.done && !t.responsible).length };
+  app.innerHTML = `
+  <section class="panel">
+    <div class="row"><h2 style="flex:1;margin:0">Aktivitetstavla</h2><button class="btn primary" data-act="tasknew">+ Nytt ärende</button></div>
+    <p class="small muted">Saker vi behöver ta tag i. Alla ledare kan lägga in ärenden, sätta ansvarig och deadline och klarmarkera.</p>
+    <div class="row filters">${[['alla', 'Alla öppna'], ['mina', 'Mina'], ['ingen', 'Utan ansvarig']].map(([v, l]) => `<button class="chipbtn${f === v ? ' on' : ''}" data-act="taskfilter" data-v="${v}">${l} <span class="n">${cnt[v]}</span></button>`).join('')}</div>
+    ${open.length ? `<ul class="tasks">${open.map(taskItem).join('')}</ul>` : `<p class="muted">${f === 'mina' ? 'Du har inga öppna ärenden.' : f === 'ingen' ? 'Alla öppna ärenden har en ansvarig.' : 'Inga öppna ärenden. Bra jobbat!'}</p>`}
+  </section>
+  ${done.length ? `<section class="panel"><details><summary><strong>Klara</strong> <span class="small muted">(${done.length})</span></summary><ul class="tasks">${done.slice(0, 100).map(taskItem).join('')}</ul></details></section>` : ''}`;
+}
+function taskDialog(id) {
+  const t = id ? (S.state.tasks || []).find((x) => x.id === id) : { title: '', details: '', responsible: null, deadline: null, done: false };
+  if (!t) return;
+  const names = S.state.leaderNames || [];
+  const dlg = $('#dlg');
+  dlg.innerHTML = `
+  <form method="dialog" class="stack" id="taskform">
+    <h2>${id ? 'Ärende' : 'Nytt ärende'}</h2>
+    <label>Vad behöver göras?<input name="title" required maxlength="200" value="${esc(t.title)}" placeholder="t.ex. Boka domare till hemmapoolspelet"></label>
+    <label>Beskrivning (valfritt)<textarea name="details" rows="4" maxlength="4000">${esc(t.details || '')}</textarea></label>
+    <div class="grid4">
+      <label>Ansvarig<select name="responsible"><option value="">Ingen ansvarig ännu</option>${names.map((n) => `<option value="${n.id}" ${n.id === t.responsible ? 'selected' : ''}>${esc(n.name)}${n.id === S.me.id ? ' (jag)' : ''}</option>`).join('')}</select></label>
+      <label>Deadline<input type="date" name="deadline" value="${esc(t.deadline || '')}"></label>
+    </div>
+    ${id ? `<label class="check"><input type="checkbox" name="done" ${t.done ? 'checked' : ''}> Klart</label>
+      <p class="small muted">Inlagt av ${esc(t.created_by_name || '')} ${fDT(t.created_at)}${t.updated_by_name ? ` · senast ändrat av ${esc(t.updated_by_name)} ${fDT(t.updated_at)}` : ''}</p>` : ''}
+    <div class="row"><button class="btn primary" value="save">Spara</button><button class="btn" value="cancel" formnovalidate>Avbryt</button>
+      ${id ? '<button class="btn danger" value="delete" formnovalidate style="margin-left:auto">Ta bort</button>' : ''}</div>
+  </form>`;
+  dlg.showModal();
+  const f = $('#taskform');
+  dlg.onclose = async () => {
+    const v = dlg.returnValue;
+    try {
+      if (v === 'save') {
+        const title = f.title.value.trim(); if (!title) return;
+        await B.saveTask({ id: id || undefined, title, details: f.details.value.trim(), responsible: f.responsible.value || null, deadline: f.deadline.value || null, done: id ? f.done.checked : false });
+        toast('Ärendet är sparat.');
+      } else if (v === 'delete') {
+        if (!(await askConfirm('Ta bort ärendet? Det går inte att ångra.'))) return;
+        await B.deleteTask(id); toast('Ärendet är borttaget.');
+      } else return;
+      await refreshState(); renderTaskCount(); viewTasks();
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
 // ---------- egna matchspel ----------
 const CE_TYPES = ['Träningsmatch', 'Poolspel', 'Cup'];
 const CE_DEF = { Träningsmatch: 'träningsmatchen', Poolspel: 'poolspelet', Cup: 'cupen' };
@@ -1646,6 +1780,20 @@ document.addEventListener('click', async (e) => {
         await refreshState(); location.hash = `#/omgang/${round.id}`; break;
       }
       case 'goalieok': await act('goalieOk', { key: d.key, pid: d.pid, ok: !(S.round.teams[d.key]?.goalieOk || []).includes(d.pid) }); break;
+      case 'lgoalie': await leaderGoalie(d.key, d.pid || null, d.state); break;
+      case 'lgoalieother': {
+        const pid = document.querySelector(`[data-goalie-other="${CSS.escape(d.key)}"]`)?.value;
+        if (!pid) return toast('Välj en spelare först.', true);
+        await leaderGoalie(d.key, pid, 'ok'); break;
+      }
+      case 'pgoalienone': await act('goalieNone', { key: d.key, none: d.v === '1' }); break;
+      case 'tasknew': taskDialog(null); break;
+      case 'taskedit': taskDialog(d.id); break;
+      case 'taskdone': {
+        const tk = (S.state.tasks || []).find((x) => x.id === d.id);
+        await B.saveTask({ ...tk, done: !tk.done }); await refreshState(); viewTasks(); toast(tk.done ? 'Ärendet är öppnat igen.' : 'Klarmarkerat!'); break;
+      }
+      case 'taskfilter': S.taskFilter = d.v; viewTasks(); break;
       case 'noticeseen': await markSeen(); renderNotices(false); break;
       case 'ce-del': S.ce.read(); S.ce.matches.splice(Number(d.i), 1); S.ce.render(); break;
       case 'ce-roundrobin': {
