@@ -356,3 +356,20 @@ fieldset { min-width: 0; }
 .noresp { color: #a15c00; }
 .deadline.late { color: #c4162a; font-weight: 700; }
 .deadline.soon { color: #a15c00; font-weight: 600; }
+
+/* Återbud och kallelsestatistik */
+.declh { color: #8a1c2b; }
+.declined { list-style: none; padding: 0; margin: 0 0 6px; display: flex; flex-direction: column; gap: 4px; }
+.declined li { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pl.static { cursor: default; text-decoration: line-through; opacity: .75; background: #f6f7f9; }
+.hist th.grp { text-align: center; border-bottom: 1px solid var(--line, #e3e7ed); }
+.hist td, .hist th { text-align: center; }
+.hist td:first-child, .hist th:first-child, .hist td:last-child, .hist th:last-child { text-align: left; }
+.hist td.sub { color: #5b6573; }
+.hist .yes { color: #136b3a; font-weight: 600; }
+.no { color: #c4162a; font-weight: 600; }
+
+/* Tröjor under deltagande lag */
+.teamrow .jerseys { display: flex; gap: 3px; justify-content: center; }
+.teamrow .jersey { width: 22px; height: 21px; display: block; }
+@media print { .teamrow .jersey { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }

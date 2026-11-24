@@ -44,6 +44,7 @@ export function colorKey(c) {
 export const colorLabel = (c) => COLORS[colorKey(c)]?.[0] || (c ? String(c) : 'Okänd');
 export const colorHex = (c) => COLORS[colorKey(c)]?.[1] || '#cccccc';
 const GROUP = { navy: 'black', maroon: 'red' };
+const isRed = (c) => (GROUP[colorKey(c)] || colorKey(c)) === 'red';
 export function clash(a, b) {
   const x = colorKey(a), y = colorKey(b);
   if (!x || !y) return false;
@@ -109,7 +110,9 @@ export function assignJerseys(matches, colors, forced = {}) {
         for (const ka of S.has(m.away) && !fixedAway.has(m.away) ? ['home', 'away'] : [fixedAway.has(m.away) ? 'away' : 'home'])
           if (!clash(col(m.home, kh), col(m.away, ka))) opts.push({ home: kh, away: ka });
       if (!opts.length) return null;
-      const score = (o) => (o.home === 'away' ? (isOurs(m.home) ? 1 : 3) : 0) + (o.away === 'away' ? (isOurs(m.away) ? 1 : 3) : 0);
+      // Järfälla byter först. Är det annars lika får Järfällalaget ha den röda tröjan.
+      const score = (o) => (o.home === 'away' ? (isOurs(m.home) ? 1 : 3) : 0) + (o.away === 'away' ? (isOurs(m.away) ? 1 : 3) : 0)
+        + 0.1 * ((isOurs(m.home) && !isRed(col(m.home, o.home)) ? 1 : 0) + (isOurs(m.away) && !isRed(col(m.away, o.away)) ? 1 : 0));
       opts.sort((a, b) => score(a) - score(b));
       kits[m.id] = opts[0];
     }
@@ -131,7 +134,10 @@ export function assignJerseys(matches, colors, forced = {}) {
     const used = new Set();
     for (const m of matches) { if (r.kits[m.id].home === 'away') used.add(m.home); if (r.kits[m.id].away === 'away') used.add(m.away); }
     const changed = [...used].filter((t) => !fixedAway.has(t));
-    const cost = changed.length * 1000 + changed.filter((t) => !isOurs(t)).length * 10 + r.mixed;
+    // Ordning: färst lag som byter, sedan att Järfälla byter först, sedan att Järfällalagen får spela i rött, sist färst lag som byter mitt under dagen
+    let redLoss = 0;
+    for (const m of matches) for (const side of ['home', 'away']) if (isOurs(m[side]) && !isRed(col(m[side], r.kits[m.id][side]))) redLoss++;
+    const cost = changed.length * 1000 + changed.filter((t) => !isOurs(t)).length * 10 + redLoss + r.mixed * 0.1;
     if (!best || cost < best.cost) best = { cost, kits: r.kits };
   }
   if (!best) {

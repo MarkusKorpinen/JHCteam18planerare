@@ -63,6 +63,22 @@ export function historyStats(history) {
   return { pairs, teamPairs, apps, goalieApps, pairCount: (a, b) => pairs.get(pairKey(a, b)) || 0, teamPairCount: (a, b) => teamPairs.get(pairKey(a, b)) || 0 };
 }
 
+// Kallelser per spelare ur fastställda omgångar: tackat ja (med i laget) eller nej (återbud),
+// uppdelat på kallad som ordinarie och som reserv. Äldre omgångar utan reservlista använder spelarens nuvarande grupp.
+export function callStats(history, players = []) {
+  const squad = new Map(players.map((p) => [p.id, p.squad]));
+  const out = new Map();
+  const get = (id) => out.get(id) || (out.set(id, { ordYes: 0, ordNo: 0, resYes: 0, resNo: 0, goalie: 0 }), out.get(id));
+  for (const h of history || []) for (const t of h.teams || []) {
+    const res = new Set(t.reserves || [...(t.goalies || []), ...(t.lines || []).flat(), ...(t.declined || [])].filter((id) => squad.get(id) === 'reserv'));
+    for (const id of [...(t.goalies || []), ...(t.lines || []).flat()]) get(id)[res.has(id) ? 'resYes' : 'ordYes']++;
+    for (const id of t.goalies || []) get(id).goalie++;
+    for (const id of t.declined || []) get(id)[res.has(id) ? 'resNo' : 'ordNo']++;
+  }
+  for (const s of out.values()) Object.assign(s, { ord: s.ordYes + s.ordNo, res: s.resYes + s.resNo, yes: s.ordYes + s.resYes, no: s.ordNo + s.resNo, calls: s.ordYes + s.ordNo + s.resYes + s.resNo });
+  return out;
+}
+
 const isAvailable = (availability, key, pid) => !(availability?.[key]?.[pid] === false);
 export const isReserve = (p) => p?.squad === 'reserv';
 const res = (p) => (isReserve(p) ? 1 : 0);

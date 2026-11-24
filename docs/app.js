@@ -1,15 +1,15 @@
 // Järfälla HC Team 2018 – gränssnitt. Koden innehåller ingen spelardata; den hämtas efter inloggning.
-import { CONFIG } from './config.js?v=20261121a';
-import { createSupabaseBackend } from './backend-supabase.js?v=20261121a';
-import { createDemoBackend } from './backend-demo.js?v=20261121a';
-import { RULES, isReserve, rosterText } from './lib/planner.js?v=20261121a';
-import { playersFromCsv } from './lib/csv.js?v=20261121a';
-import { runSync } from './lib/schedule.js?v=20261121a';
-import { ACTIONS, ALLOWED_WHEN_CONFIRMED, newRound, addLog, snapshot, view, pendingReview, teamName } from './lib/rounds.js?v=20261121a';
-import { ARENAS, DEFAULT_TEXTS, arenaFor, buildMatches, assignJerseys, resolveColors, clubOf, isOurs, colorLabel, colorHex, rinkSvg } from './lib/invite.js?v=20261121a';
-import { DEMO_ROLES } from './backend-demo.js?v=20261121a';
-import { mergeCustom, customKey, addMinutes, OUR_COLORS } from './lib/custom.js?v=20261121a';
-import { goalieText } from './lib/goalie.js?v=20261121a';
+import { CONFIG } from './config.js?v=20261124a';
+import { createSupabaseBackend } from './backend-supabase.js?v=20261124a';
+import { createDemoBackend } from './backend-demo.js?v=20261124a';
+import { RULES, isReserve, rosterText, callStats } from './lib/planner.js?v=20261124a';
+import { playersFromCsv } from './lib/csv.js?v=20261124a';
+import { runSync } from './lib/schedule.js?v=20261124a';
+import { ACTIONS, ALLOWED_WHEN_CONFIRMED, newRound, addLog, snapshot, view, pendingReview, teamName } from './lib/rounds.js?v=20261124a';
+import { ARENAS, DEFAULT_TEXTS, arenaFor, buildMatches, assignJerseys, resolveColors, clubOf, isOurs, colorLabel, colorHex, rinkSvg } from './lib/invite.js?v=20261124a';
+import { DEMO_ROLES } from './backend-demo.js?v=20261124a';
+import { mergeCustom, customKey, addMinutes, OUR_COLORS } from './lib/custom.js?v=20261124a';
+import { goalieText } from './lib/goalie.js?v=20261124a';
 
 const $ = (s, el = document) => el.querySelector(s);
 const app = $('#app');
@@ -421,7 +421,7 @@ async function act(type, extra = {}, opts = {}) {
     const history = r.status === 'fastställt' ? snapshot(r, ctx()) : null;
     const saved = await B.saveRound(r, S.round.version, { force: !!opts.force, history });
     S.round = { ...saved, comments }; S.pending = null;
-    if (type === 'confirm' || type === 'reopen' || type === 'rename') await refreshState();
+    if (type === 'confirm' || type === 'reopen' || type === 'rename' || history) await refreshState();
     renderRound(true);
     return true;
   } catch (e) {
@@ -486,6 +486,10 @@ function teamCard(key) {
       ${t.goalieNone ? '' : `<button class="linkbtn small" data-act="pgoalienone" data-key="${esc(key)}" data-v="1">Ingen har accepterat att stå i mål</button>`}
       ${t.lines.map((l, i) => `<h4>Kedja ${i + 1} <span class="muted small">(${l.length})</span></h4><div class="chips drop" data-drop-key="${esc(key)}" data-drop-role="S" data-drop-line="${i}">${l.map((id) => chip(id, key)).join('')}</div>`).join('') || '<h4>Utespelare</h4><span class="empty">Inga utespelare</span>'}
       ${r.status !== 'fastställt' ? `<div class="chips drop newline" data-drop-key="${esc(key)}" data-drop-role="S" data-drop-line="new">Släpp här för ny kedja</div>` : ''}
+      ${(t.declined || []).length ? `<h4 class="declh">Återbud <span class="muted small">(${t.declined.length}) räknas inte in i laget</span></h4>
+      <ul class="declined">${t.declined.map((id) => `<li><span class="pl static"><span class="ldot" style="--c:${levelColor(P(id)?.level)}"></span>${esc(P(id)?.name || 'Okänd')}${(t.calledAsReserve || []).includes(id) || isReserve(P(id)) ? '<span class="res" title="Kallad som reserv">R</span>' : ''}</span>
+        <button class="linkbtn" data-act="callin" data-pid="${id}" data-key="${esc(key)}">Kalla ersättare</button>
+        <button class="linkbtn" data-act="undecline" data-pid="${id}" data-key="${esc(key)}">Ångra återbud</button></li>`).join('')}</ul>` : ''}
       <h4>Tränare</h4>
       <div class="chips">${(t.coaches || []).map((id) => `<span class="coach${!coachAvail(key, id) ? ' bad' : ''}">${esc(C(id)?.name || 'Okänd tränare')}${isReserve(C(id)) ? '<span class="res">R</span>' : ''}${(r.coachLocks || []).some((l) => l.cid === id && l.key === key) ? '<span class="lock">🔒</span>' : ''}</span>`).join('') || '<span class="empty">Ingen ledare</span>'}</div>
       <div class="row cardactions">
@@ -561,6 +565,7 @@ function renderRoundReadOnly() {
         <ul class="matches">${(u?.matches || []).map((m) => `<li class="${m.missing ? 'missing' : ''}"><span class="time">${esc(m.start || 'tid ej satt')}</span> mot ${esc(opponent(u, m))}</li>`).join('')}</ul></div>
         <h4>Målvakt</h4>${goalieBox(key, t)}
         <h4>Utespelare</h4><div class="namelist">${(t.skaters || []).map((id) => `<div>${name(id)}</div>`).join('') || '<div class="muted">–</div>'}</div>
+        ${(t.declined || []).length ? `<h4 class="declh">Återbud</h4><div class="namelist muted">${t.declined.map((id) => `<div><s>${name(id)}</s></div>`).join('')}</div>` : ''}
         <h4>Tränare</h4><div class="namelist">${(t.coaches || []).map((id) => `<div>${esc(C(id)?.name || '')}</div>`).join('') || '<div class="muted">–</div>'}</div>
         ${draft ? '' : `<div class="row cardactions"><button class="btn" data-act="copyteam" data-key="${esc(key)}">Kopiera laglista</button><a class="btn" href="#/utskrift/${r.id}/${encodeURIComponent(key)}">Laglista som PDF</a></div>`}
       </div></article>`;
@@ -666,7 +671,7 @@ function playerDialog(pid, fromKey) {
       <select name="to"><option value="">${fromKey ? 'Ej uttagen (ta bort från laget)' : 'Ej uttagen'}</option>${opts}</select>
     </label>
     <label class="check"><input type="checkbox" name="locked" ${fromKey && isLocked(pid, fromKey) ? 'checked' : ''}> Lås placeringen när nytt förslag skapas</label>`}
-    ${fromKey ? `<label class="check"><input type="checkbox" name="unavail" ${!isAvail(fromKey, pid) ? 'checked' : ''}> Kan inte ${esc(U(fromKey)?.label)} ${fDate(U(fromKey)?.date)}</label>` : ''}
+    ${fromKey ? `<label class="check"><input type="checkbox" name="unavail" ${!isAvail(fromKey, pid) ? 'checked' : ''}> Har tackat nej – flytta till återbud i ${esc(U(fromKey)?.label)} ${fDate(U(fromKey)?.date)}</label>` : ''}
     <div class="row"><button class="btn primary" value="save">Spara</button><button class="btn" value="cancel" formnovalidate>Avbryt</button></div>
   </form>`;
   const sel = dlg.querySelector('select[name=to]');
@@ -679,7 +684,10 @@ function playerDialog(pid, fromKey) {
       const want = !f.unavail.checked;
       if (want !== isAvail(fromKey, pid)) {
         await setAvail(fromKey, pid, want, false);
-        if (!want && !confirmed && placementOf(pid).some((x) => x.key === fromKey)) { renderRound(true); replacementDialog(pid, fromKey); return; }
+        if (!want && placementOf(pid).some((x) => x.key === fromKey)) {
+          if (await act('decline', { key: fromKey, pid })) replacementDialog(pid, fromKey);
+          return;
+        }
       }
     }
     if (!confirmed && sel) {
@@ -861,30 +869,43 @@ function viewSchedule() {
 // ---------- historik ----------
 function viewHistory() {
   const h = S.state.history;
-  const stat = new Map();
-  const get = (id) => stat.get(id) || (stat.set(id, { pool: 0, goalie: 0, mates: new Map() }), stat.get(id));
-  for (const r of h) for (const t of r.teams) {
-    for (const g of t.goalies) { get(g).pool++; get(g).goalie++; }
-    for (const l of t.lines) for (const a of l) { get(a).pool++; for (const b of l) if (a !== b) get(a).mates.set(b, (get(a).mates.get(b) || 0) + 1); }
+  const st = stats();
+  const mates = new Map();
+  for (const r of h) for (const t of r.teams) for (const l of t.lines) for (const a of l) for (const b of l) if (a !== b) {
+    if (!mates.has(a)) mates.set(a, new Map()); mates.get(a).set(b, (mates.get(a).get(b) || 0) + 1);
   }
-  const ps = S.state.players.filter((p) => p.active !== false).sort((a, b) => a.name.localeCompare(b.name, 'sv'));
+  const sort = S.histSort || 'namn';
+  const z = { ord: 0, ordYes: 0, ordNo: 0, res: 0, resYes: 0, resNo: 0, yes: 0, no: 0, calls: 0, goalie: 0 };
+  const rows = S.state.players.filter((p) => p.active !== false || st.has(p.id)).map((p) => ({ p, s: st.get(p.id) || z }));
+  const by = { namn: () => 0, kallelser: (a, b) => b.s.calls - a.s.calls, ja: (a, b) => b.s.yes - a.s.yes, nej: (a, b) => b.s.no - a.s.no, minst: (a, b) => a.s.yes - b.s.yes, mal: (a, b) => b.s.goalie - a.s.goalie }[sort] || (() => 0);
+  rows.sort((a, b) => by(a, b) || a.p.name.localeCompare(b.p.name, 'sv'));
+  const sum = rows.reduce((a, { s }) => { for (const k in z) a[k] += s[k]; return a; }, { ...z });
+  const yn = (y, n) => `<span class="yes">${y}</span> / <span class="${n ? 'no' : ''}">${n}</span>`;
   app.innerHTML = `
   <section class="panel">
-    <h2>Speltid och kedjekamrater</h2>
-    <p class="small muted">Bygger på fastställda omgångar. Förslagen använder detta för att rotera målvakter och variera kedjor.</p>
-    <div class="tablewrap"><table class="players">
-      <thead><tr><th>Spelare</th><th>Poolspel</th><th>I mål</th><th>Oftast i kedja med</th></tr></thead>
-      <tbody>${ps.map((p) => { const s = stat.get(p.id) || { pool: 0, goalie: 0, mates: new Map() };
-        const top = [...s.mates].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([id, n]) => `${esc(P(id)?.name || '?')} ${n}`).join(', ');
-        return `<tr><td><span class="ldot" style="--c:${levelColor(p.level)}"></span>${esc(p.name)}</td><td>${s.pool}</td><td>${s.goalie}</td><td class="small">${top || '–'}</td></tr>`; }).join('')}</tbody>
+    <h2>Kallelser och speltid</h2>
+    <p class="small muted">Bygger på fastställda omgångar. <strong>Ja</strong> = med i laget, <strong>Nej</strong> = återbud. Kallelser som reserv räknas för sig. Förslagen roterar efter hur mycket man har spelat.</p>
+    <div class="row"><label class="small">Sortera
+      <select id="histsort">${[['namn', 'Namn'], ['kallelser', 'Flest kallelser'], ['ja', 'Flest ja (spelat mest)'], ['minst', 'Minst spelat'], ['nej', 'Flest nej'], ['mal', 'Flest gånger i mål']].map(([v, l]) => `<option value="${v}" ${v === sort ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      <span class="small muted">Totalt ${sum.calls} kallelser: ${sum.yes} ja, ${sum.no} nej.</span></div>
+    <div class="tablewrap"><table class="players hist">
+      <thead><tr><th rowspan="2">Spelare</th><th rowspan="2">Kallad</th><th colspan="2" class="grp">Totalt</th><th colspan="2" class="grp">Som ordinarie</th><th colspan="2" class="grp">Som reserv</th><th rowspan="2">I mål</th><th rowspan="2">Oftast i kedja med</th></tr>
+        <tr><th>Ja</th><th>Nej</th><th>Ja</th><th>Nej</th><th>Ja</th><th>Nej</th></tr></thead>
+      <tbody>${rows.map(({ p, s }) => {
+        const top = [...(mates.get(p.id) || [])].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([id, n]) => `${esc(P(id)?.name || '?')} ${n}`).join(', ');
+        return `<tr><td><span class="ldot" style="--c:${levelColor(p.level)}"></span>${esc(p.name)}${isReserve(p) ? ' <span class="res">R</span>' : ''}</td>
+          <td><strong>${s.calls}</strong></td><td class="yes">${s.yes}</td><td class="${s.no ? 'no' : ''}">${s.no}</td>
+          <td class="sub">${s.ordYes}</td><td class="sub ${s.ordNo ? 'no' : ''}">${s.ordNo}</td><td class="sub">${s.resYes}</td><td class="sub ${s.resNo ? 'no' : ''}">${s.resNo}</td>
+          <td>${s.goalie}</td><td class="small">${top || '–'}</td></tr>`; }).join('')}</tbody>
     </table></div>
   </section>
   <section class="panel">
     <h2>Fastställda omgångar</h2>
     ${[...h].reverse().map((r) => `<details><summary><strong>${esc(r.roundName)}</strong> <span class="small muted">fastställd ${fDT(r.confirmedAt)}</span></summary>
-      ${r.teams.map((t) => `<p class="small"><strong>${esc(t.label)} ${fDate(t.date)}</strong>: MV ${t.goalies.map((id) => esc(P(id)?.name)).join(', ') || '–'} · ${t.lines.map((l, i) => `K${i + 1} ${l.map((id) => esc(P(id)?.name)).join(', ')}`).join(' · ')}</p>`).join('')}
+      ${r.teams.map((t) => `<p class="small"><strong>${esc(t.label)} ${fDate(t.date)}</strong>: MV ${t.goalies.map((id) => esc(P(id)?.name)).join(', ') || '–'} · ${t.lines.map((l, i) => `K${i + 1} ${l.map((id) => esc(P(id)?.name)).join(', ')}`).join(' · ')}${(t.declined || []).length ? ` · <span class="no">Återbud: ${t.declined.map((id) => esc(P(id)?.name)).join(', ')}</span>` : ''}${(t.reserves || []).length ? ` · Reserv: ${t.reserves.map((id) => esc(P(id)?.name)).join(', ')}` : ''}</p>`).join('')}
       <a href="#/omgang/${r.roundId}" class="small">Öppna omgången</a></details>`).join('') || '<p class="muted">Inga fastställda omgångar ännu.</p>'}
   </section>`;
+  $('#histsort').onchange = (e) => { S.histSort = e.target.value; viewHistory(); };
 }
 
 // ---------- ledare och inställningar ----------
@@ -1005,6 +1026,8 @@ async function makeInvite(email, roles = {}) {
 }
 
 // ---------- reserver och tränare ----------
+const stats = () => callStats(S.state.history, S.state.players);
+const declinedOnDate = (pid, date) => S.round.keys.some((k) => U(k)?.date === date && (S.round.teams[k].declined || []).includes(pid));
 function historyApps() {
   const n = new Map();
   for (const h of S.state.history) for (const t of h.teams) for (const id of [...t.goalies, ...t.lines.flat()]) n.set(id, (n.get(id) || 0) + 1);
@@ -1014,17 +1037,18 @@ function busyOnDate(pid, date) {
   return S.round.keys.find((k) => U(k)?.date === date && [...S.round.teams[k].goalies, ...S.round.teams[k].lines.flat()].includes(pid));
 }
 function reserveDialog(key) {
-  const u = U(key), apps = historyApps();
-  const list = S.state.players.filter((p) => p.active !== false && isReserve(p) && isAvail(key, p.id) && !busyOnDate(p.id, u?.date))
-    .sort((a, b) => (apps.get(a.id) || 0) - (apps.get(b.id) || 0) || a.name.localeCompare(b.name, 'sv'));
+  const u = U(key), st = stats();
+  const sv = (id) => st.get(id) || { ord: 0, yes: 0, resYes: 0 };
+  const list = S.state.players.filter((p) => p.active !== false && isReserve(p) && isAvail(key, p.id) && !busyOnDate(p.id, u?.date) && !declinedOnDate(p.id, u?.date))
+    .sort((a, b) => sv(a.id).ord - sv(b.id).ord || sv(a.id).yes - sv(b.id).yes || a.name.localeCompare(b.name, 'sv'));
   const t = S.round.teams[key];
   const inTeam = new Set([...t.goalies, ...t.lines.flat()]);
   const placedSomewhere = (pid) => S.round.keys.some((k) => [...S.round.teams[k].goalies, ...S.round.teams[k].lines.flat()].includes(pid));
   const extras = S.state.players.filter((p) => p.active !== false && !isReserve(p) && !inTeam.has(p.id) && placedSomewhere(p.id) && isAvail(key, p.id))
     .sort((a, b) => a.name.localeCompare(b.name, 'sv'));
   const where = (pid) => S.round.keys.filter((k) => [...S.round.teams[k].goalies, ...S.round.teams[k].lines.flat()].includes(pid)).map((k) => `${U(k)?.label.replace('U9 ', '')}${U(k)?.date === u?.date ? ', samma dag!' : ''}`).join('; ');
-  const freeOrd = S.state.players.filter((p) => p.active !== false && !isReserve(p) && !placedSomewhere(p.id) && isAvail(key, p.id)).sort((a, b) => a.name.localeCompare(b.name, 'sv'));
-  const opt = (p, extra) => `<option value="${p.id}" data-extra="${extra ? 1 : 0}">${esc(p.name)}${p.canGoalie ? ' (MV)' : ''}${extra ? ` – spelar redan i ${esc(where(p.id))}` : ` – ${apps.get(p.id) || 0} poolspel`}</option>`;
+  const freeOrd = S.state.players.filter((p) => p.active !== false && !isReserve(p) && !placedSomewhere(p.id) && isAvail(key, p.id) && !declinedOnDate(p.id, u?.date)).sort((a, b) => a.name.localeCompare(b.name, 'sv'));
+  const opt = (p, extra) => `<option value="${p.id}" data-extra="${extra ? 1 : 0}">${esc(p.name)}${p.canGoalie ? ' (MV)' : ''}${extra ? ` – spelar redan i ${esc(where(p.id))}` : ` – ${sv(p.id).ord} kallad ord., spelat ${sv(p.id).yes}${sv(p.id).resYes ? ` (${sv(p.id).resYes} som reserv)` : ''}`}</option>`;
   const any = list.length || extras.length || freeOrd.length;
   const dlg = $('#dlg');
   dlg.innerHTML = `
@@ -1034,7 +1058,7 @@ function reserveDialog(key) {
     ${any ? `
     <label>Spelare
       <select name="pid">
-        ${list.length ? `<optgroup label="Reserver (färst spelade poolspel överst)">${list.map((p) => opt(p, false)).join('')}</optgroup>` : ''}
+        ${list.length ? `<optgroup label="Reserver (färst kallelser som ordinarie överst)">${list.map((p) => opt(p, false)).join('')}</optgroup>` : ''}
         ${freeOrd.length ? `<optgroup label="Ordinarie som inte är uttagna">${freeOrd.map((p) => opt(p, false)).join('')}</optgroup>` : ''}
         ${extras.length ? `<optgroup label="Ordinarie som redan spelar i ett annat lag (spelar två gånger)">${extras.map((p) => opt(p, true)).join('')}</optgroup>` : ''}
       </select>
@@ -1267,15 +1291,16 @@ async function editRoutine(id) {
 const DEFAULT_SUBS = { Grön: ['Lila'], Orange: ['Lila'], Lila: ['Orange', 'Grön'] };
 const subsFor = (level) => S.state.settings.substitutes?.[level] ?? DEFAULT_SUBS[level] ?? [];
 function suggestReplacements(pid, key) {
-  const p = P(pid), u = U(key), apps = historyApps();
+  const p = P(pid), u = U(key), apps = historyApps(), st = stats();
   const t = S.round.teams[key];
-  const isGoalie = t.goalies.includes(pid);
+  const isGoalie = t.goalies.includes(pid) || (t.declined?.includes(pid) && t.goalies.length < (S.round.settings?.goalies ?? 1));
   const subs = subsFor(p.level);
   const tier = (q) => (q.level === p.level ? 0 : subs.includes(q.level) ? 1 + subs.indexOf(q.level) : 9);
   return S.state.players
-    .filter((q) => q.active !== false && q.id !== pid && isAvail(key, q.id) && !busyOnDate(q.id, u?.date))
-    .map((q) => ({ q, tier: tier(q), apps: apps.get(q.id) || 0 }))
-    .sort((a, b) => a.tier - b.tier || (isGoalie ? b.q.canGoalie - a.q.canGoalie : 0) || a.apps - b.apps || a.q.name.localeCompare(b.q.name, 'sv'));
+    .filter((q) => q.active !== false && q.id !== pid && isAvail(key, q.id) && !busyOnDate(q.id, u?.date) && !declinedOnDate(q.id, u?.date))
+    .map((q) => { const s = st.get(q.id) || {}; return { q, tier: tier(q), apps: apps.get(q.id) || 0, ord: s.ord || 0, played: s.yes || 0, resYes: s.resYes || 0 }; })
+    // Färst kallelser som ordinarie först, sedan färst spelade
+    .sort((a, b) => a.tier - b.tier || (isGoalie ? b.q.canGoalie - a.q.canGoalie : 0) || a.ord - b.ord || a.played - b.played || a.q.name.localeCompare(b.q.name, 'sv'));
 }
 function replacementDialog(pid, key) {
   const p = P(pid), u = U(key);
@@ -1283,14 +1308,14 @@ function replacementDialog(pid, key) {
   const groups = [['Samma nivågrupp', all.filter((x) => x.tier === 0).slice(0, 4)], ...subsFor(p.level).map((lv, i) => [`I andra hand: ${lv}`, all.filter((x) => x.tier === i + 1).slice(0, 3)])];
   const rest = all.filter((x) => x.tier === 9);
   const row = (x) => `<li><span><span class="ldot" style="--c:${levelColor(x.q.level)}"></span><strong>${esc(x.q.name)}</strong>${x.q.canGoalie ? '<span class="mv">MV</span>' : ''}${isReserve(x.q) ? '<span class="res">R</span>' : ''}
-      <span class="small muted block">${x.apps} poolspel hittills</span></span>
+      <span class="small muted block">${x.ord} kallelser som ordinarie · spelat ${x.played}${x.resYes ? ` (varav ${x.resYes} som reserv)` : ''}</span></span>
       <button class="btn small primary" value="${x.q.id}">Kalla in</button></li>`;
   const dlg = $('#dlg');
   dlg.innerHTML = `
   <form method="dialog" class="stack">
     <h2>Ersättare för ${esc(p.name)}</h2>
     <p class="small">${esc(u?.label)} · ${fDate(u?.date)} · ${esc(p.level || '')}${S.round.teams[key].goalies.includes(pid) ? ' · målvakt' : ''}</p>
-    <p class="small muted">Förslag bland spelare som kan och inte redan spelar den dagen. De som spelat minst antal poolspel står först.</p>
+    <p class="small muted">Förslag bland spelare som kan och inte redan spelar den dagen. De som kallats minst antal gånger som ordinarie står först.</p>
     ${groups.filter(([, l]) => l.length).map(([h, l]) => `<h4>${esc(h)}</h4><ul class="sublist">${l.map(row).join('')}</ul>`).join('') || '<p>Inga lediga spelare i samma eller närliggande nivågrupp.</p>'}
     ${rest.length ? `<details><summary class="small">Övriga lediga (${rest.length})</summary><ul class="sublist">${rest.slice(0, 10).map(row).join('')}</ul></details>` : ''}
     <div class="row"><button class="btn" value="cancel" formnovalidate>Inte nu</button></div>
@@ -1299,7 +1324,8 @@ function replacementDialog(pid, key) {
   dlg.onclose = async () => {
     const v = dlg.returnValue;
     if (!v || v === 'cancel') return;
-    if (await act('replace', { outPid: pid, inPid: v, key })) toast(`${P(v)?.name} är inkallad.`);
+    const declined = (S.round.teams[key].declined || []).includes(pid);
+    if (await act(declined ? 'callIn' : 'replace', declined ? { key, pid: v, forPid: pid } : { outPid: pid, inPid: v, key })) toast(`${P(v)?.name} är inkallad som reserv.`);
   };
 }
 
@@ -1632,6 +1658,12 @@ const longDate = (d) => new Intl.DateTimeFormat('sv-SE', { weekday: 'long', day:
 function invitationSheet(v) {
   const { ev, arena, matches, jer, teams, texts } = v;
   const colorFor = (team, kit) => (v.colors[team] || {})[kit];
+  // Tröjorna laget ska ta med, visade som färgade tröjor (en per tröja som används under dagen)
+  const jersey = (c) => `<svg class="jersey${c ? '' : ' unknown'}" viewBox="0 0 32 30" aria-hidden="true"><path d="M10 2 L4 5 L1 12 L6 14 L7 11 L7 28 L25 28 L25 11 L26 14 L31 12 L28 5 L22 2 C21 5 19 6 16 6 C13 6 11 5 10 2 Z" fill="${c ? colorHex(c) : '#ffffff'}" stroke="#3b4552" stroke-width="1.3" stroke-linejoin="round"/>${c ? '' : '<text x="16" y="21" text-anchor="middle" font-size="11" font-weight="700" fill="#8a8f98">?</text>'}</svg>`;
+  const teamJerseys = (t) => {
+    const used = [...new Set((jer.teams[t]?.perMatch || []).map((x) => x.kit))].sort((a, b) => (a === 'home' ? -1 : 1));
+    return (used.length ? used : ['home']).map((k) => `<span title="${esc(colorLabel(colorFor(t, k)))}">${jersey(colorFor(t, k))}</span>`).join('');
+  };
   const side = (m, which) => {
     const team = m[which], c = colorFor(team, jer.kits[m.id]?.[which] || 'home');
     return `<span class="gteam"><span class="gname">${esc(team)}</span><span class="gkit"><span class="sw${c ? '' : ' unknown'}" style="--c:${colorHex(c)}"></span>${c ? esc(colorLabel(c)) : 'Färg saknas'}</span></span>`;
@@ -1647,7 +1679,7 @@ function invitationSheet(v) {
       <p class="sub"><strong>${esc(longDate(ev.date).replace(/^./, (c) => c.toUpperCase()))}</strong> · ${esc(arena.name)}, ${esc(arena.address)}</p></div>
     </header>
     <h2>Deltagande lag</h2>
-    <div class="teamrow" style="--n:${Math.min(8, teams.length)}">${teams.map((t) => `<div class="tcell">${teamLogo(t)}<span>${esc(t)}</span></div>`).join('')}</div>
+    <div class="teamrow" style="--n:${Math.min(8, teams.length)}">${teams.map((t) => `<div class="tcell">${teamLogo(t)}<span>${esc(t)}</span><span class="jerseys">${teamJerseys(t)}</span></div>`).join('')}</div>
     <div class="h2row"><h2>Spelschema och tröjfärger</h2><span>Färgen under varje lag är tröjan laget spelar i.</span></div>
     <div class="ggrid" style="--plans:${plans}">
       <div class="gh">Tid</div>${Array.from({ length: plans }, (_, i) => `<div class="gh">Plan ${i + 1}</div>`).join('')}
@@ -1780,6 +1812,8 @@ document.addEventListener('click', async (e) => {
         await refreshState(); location.hash = `#/omgang/${round.id}`; break;
       }
       case 'goalieok': await act('goalieOk', { key: d.key, pid: d.pid, ok: !(S.round.teams[d.key]?.goalieOk || []).includes(d.pid) }); break;
+      case 'callin': replacementDialog(d.pid, d.key); break;
+      case 'undecline': await act('undecline', { key: d.key, pid: d.pid }); break;
       case 'lgoalie': await leaderGoalie(d.key, d.pid || null, d.state); break;
       case 'lgoalieother': {
         const pid = document.querySelector(`[data-goalie-other="${CSS.escape(d.key)}"]`)?.value;

@@ -1,8 +1,10 @@
 // Ändringar på en omgång. Körs i webbläsaren; databasen kontrollerar versionen när de sparas.
-// En omgång: { id, name, status, version, keys, settings, teams: {key: {goalies, lines}}, locks, log, lastSeed }
+// En omgång: { id, name, status, version, keys, settings, teams: {key: {goalies, lines, declined, calledAsReserve}}, locks, log, lastSeed }
+//   declined:        spelare som har tackat nej (återbud). De räknas inte in i laget men syns i statistiken.
+//   calledAsReserve: spelare som kallats in som reserv/ersättare till laget
 // ctx: { uppdrag, players, availability, levels, history, teamPrefix, me }
-import { propose, validate, rosterText, DEFAULT_ROUND_SETTINGS, isReserve } from './planner.js?v=20261121a';
-import { applyGoalie } from './goalie.js?v=20261121a';
+import { propose, validate, rosterText, DEFAULT_ROUND_SETTINGS, isReserve } from './planner.js?v=20261124a';
+import { applyGoalie } from './goalie.js?v=20261124a';
 
 const fail = (msg) => { throw new Error(msg); };
 export const emptyTeam = () => ({ goalies: [], lines: [] });
@@ -39,9 +41,13 @@ const playerName = (ctx, id) => ctx.players.find((p) => p.id === id)?.name || fa
 export const ACTIONS = {
   propose(r, b, ctx) {
     const seed = Number.isInteger(b.seed) ? b.seed : (Date.now() ^ Math.floor(Math.random() * 1e9)) >>> 0;
+    // Den som har tackat nej till ett lag föreslås inte i något lag samma dag
+    const availability = structuredClone(ctx.availability || {});
+    for (const k of r.keys) for (const pid of r.teams[k]?.declined || [])
+      for (const k2 of r.keys) if ((ctx.uppdrag[k2]?.date || k2) === (ctx.uppdrag[k]?.date || k)) (availability[k2] ||= {})[pid] = false;
     const res = propose({
       uppdrag: r.keys.map((k) => ({ key: k, date: ctx.uppdrag[k]?.date || k, venue: ctx.uppdrag[k]?.venue })),
-      players: ctx.players, availability: ctx.availability, locks: r.locks, settings: r.settings,
+      players: ctx.players, availability, locks: r.locks, settings: r.settings,
       coaches: ctx.coaches || [], coachAvailability: ctx.coachAvailability || {}, coachLocks: r.coachLocks || [],
       levels: ctx.levels, history: (ctx.history || []).filter((h) => h.roundId !== r.id), seed,
     });
@@ -61,6 +67,7 @@ export const ACTIONS = {
       if (!r.keys.includes(b.toKey)) fail('Okänt lag.');
       const t = (r.teams[b.toKey] ||= emptyTeam());
       removeFrom(t, b.pid);
+      if (t.declined) t.declined = t.declined.filter((x) => x !== b.pid);
       if (b.role === 'G') t.goalies.push(b.pid);
       else if (Number.isInteger(b.line) && b.line >= 0 && b.line < t.lines.length) t.lines[b.line].push(b.pid);
       else t.lines.push([b.pid]);
@@ -86,6 +93,8 @@ export const ACTIONS = {
     else if (Number.isInteger(b.line) && b.line >= 0 && b.line < t.lines.length) t.lines[b.line].push(b.pid);
     else t.lines.push([b.pid]);
     r.locks.push({ pid: b.pid, key: b.toKey, role: b.role === 'G' ? 'G' : 'S' });
+    t.declined = (t.declined || []).filter((x) => x !== b.pid);
+    t.calledAsReserve = [...new Set([...(t.calledAsReserve || []), b.pid])];
     return `lade till ${name} även i ${label(ctx, b.toKey)} (${b.role === 'G' ? 'målvakt' : 'utespelare'})`;
   },
   // Byter ut en spelare som inte kan mot en ersättare på samma plats (målvakt eller samma kedja)
@@ -100,6 +109,9 @@ export const ACTIONS = {
     if (!role) fail(`${outName} är inte med i laget.`);
     r.locks = r.locks.filter((l) => !(l.pid === b.outPid && l.key === b.key));
     r.locks.push({ pid: b.inPid, key: b.key, role });
+    // Den som byts ut har tackat nej och hamnar under återbud. Ersättaren räknas som inkallad reserv.
+    t.declined = [...(t.declined || []).filter((x) => x !== b.inPid && x !== b.outPid), ...(b.declined === false ? [] : [b.outPid])];
+    t.calledAsReserve = [...new Set([...(t.calledAsReserve || []), b.inPid])];
     return `kallade in ${inName} i stället för ${outName} i ${label(ctx, b.key)}`;
   },
   // Målvakten har bekräftat att hen kommer och står i mål. En bekräftad målvakt låses så att nytt förslag inte flyttar hen.
@@ -114,6 +126,41 @@ export const ACTIONS = {
   goalieNone(r, b, ctx) {
     applyGoalie(r, b.key, null, b.none ? 'none' : 'clear', ctx.me);
     return b.none ? `markerade att ingen har accepterat att stå i mål i ${label(ctx, b.key)}` : `tog bort ”ingen målvakt” i ${label(ctx, b.key)}`;
+  },
+  // Spelaren har tackat nej: flyttas till återbud och räknas inte i laget
+  decline(r, b, ctx) {
+    const name = playerName(ctx, b.pid);
+    const t = r.teams[b.key] || fail('Okänt lag.');
+    if (!roleOf(t, b.pid)) fail(`${name} är inte med i laget.`);
+    removeFrom(t, b.pid);
+    r.locks = r.locks.filter((l) => !(l.pid === b.pid && l.key === b.key));
+    t.declined = [...(t.declined || []).filter((x) => x !== b.pid), b.pid];
+    return `${name} tackade nej till ${label(ctx, b.key)} (återbud)`;
+  },
+  // Kalla in en ersättare till ett lag där någon har lämnat återbud. Blir målvakt om laget saknar målvakt.
+  callIn(r, b, ctx) {
+    const name = playerName(ctx, b.pid);
+    const t = r.teams[b.key] || fail('Okänt lag.');
+    if (roleOf(t, b.pid)) fail(`${name} är redan med i laget.`);
+    const role = b.role || (t.goalies.length < (r.settings?.goalies ?? 1) ? 'G' : 'S');
+    if (role === 'G') t.goalies.push(b.pid);
+    else { const size = r.settings?.lineSize || 4; const last = t.lines[t.lines.length - 1]; if (last && last.length < size) last.push(b.pid); else t.lines.push([b.pid]); }
+    t.declined = (t.declined || []).filter((x) => x !== b.pid);
+    t.calledAsReserve = [...new Set([...(t.calledAsReserve || []), b.pid])];
+    r.locks = [...r.locks.filter((l) => !(l.pid === b.pid && l.key === b.key)), { pid: b.pid, key: b.key, role }];
+    return `kallade in ${name} som reserv i ${label(ctx, b.key)}${b.forPid ? ` efter återbud från ${playerName(ctx, b.forPid)}` : ''}`;
+  },
+  // Ångra återbud: tillbaka i laget som utespelare i sista kedjan
+  undecline(r, b, ctx) {
+    const name = playerName(ctx, b.pid);
+    const t = r.teams[b.key] || fail('Okänt lag.');
+    if (!(t.declined || []).includes(b.pid)) fail(`${name} har inte lämnat återbud.`);
+    t.declined = t.declined.filter((x) => x !== b.pid);
+    const size = r.settings?.lineSize || 4;
+    const last = t.lines[t.lines.length - 1];
+    if (last && last.length < size) last.push(b.pid); else t.lines.push([b.pid]);
+    r.locks = [...r.locks.filter((l) => !(l.pid === b.pid && l.key === b.key)), { pid: b.pid, key: b.key, role: 'S' }];
+    return `${name} är med i ${label(ctx, b.key)} igen (ångrat återbud)`;
   },
   lock(r, b, ctx) {
     const name = playerName(ctx, b.pid);
@@ -158,7 +205,8 @@ export const ACTIONS = {
   confirm(r) { r.status = 'fastställt'; return 'fastställde omgången'; },
   reopen(r) { r.status = 'utkast'; return 'öppnade omgången igen som utkast'; },
 };
-export const ALLOWED_WHEN_CONFIRMED = new Set(['reopen', 'rename', 'goalieOk', 'goalieNone']);
+// Svar på kallelsen (återbud, ersättare, målvakt) går att hantera även när laget är fastställt och kallelsen har gått ut
+export const ALLOWED_WHEN_CONFIRMED = new Set(['reopen', 'rename', 'goalieOk', 'goalieNone', 'decline', 'undecline', 'replace', 'callIn']);
 
 export const teamName = (ctx, key) => `${ctx.teamPrefix || ''} ${ctx.uppdrag[key]?.label || ''}`.trim();
 
@@ -166,7 +214,13 @@ export const teamName = (ctx, key) => `${ctx.teamPrefix || ''} ${ctx.uppdrag[key
 export function snapshot(r, ctx) {
   return {
     roundId: r.id, roundName: r.name,
-    teams: r.keys.map((k) => ({ key: k, date: ctx.uppdrag[k]?.date, label: ctx.uppdrag[k]?.label, goalies: [...(r.teams[k]?.goalies || [])], lines: (r.teams[k]?.lines || []).map((l) => [...l]), coaches: [...(r.teams[k]?.coaches || [])] })),
+    teams: r.keys.map((k) => {
+      const t = r.teams[k] || {};
+      const called = [...(t.goalies || []), ...(t.lines || []).flat(), ...(t.declined || [])];
+      const asRes = new Set(t.calledAsReserve || []);
+      return { key: k, date: ctx.uppdrag[k]?.date, label: ctx.uppdrag[k]?.label, goalies: [...(t.goalies || [])], lines: (t.lines || []).map((l) => [...l]), coaches: [...(t.coaches || [])],
+        declined: [...(t.declined || [])], reserves: called.filter((id) => asRes.has(id) || isReserve(ctx.players.find((p) => p.id === id))) };
+    }),
   };
 }
 
